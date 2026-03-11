@@ -31,6 +31,8 @@ class PromptBuilder:
                 "Return JSON only:",
                 '{',
                 '  "push": true/false,',
+                '  "level": "info|warning|critical",',
+                '  "message": "...",',
                 '  "summary": "...",',
                 '  "reason": "..."',
                 "}",

@@ -248,7 +248,9 @@ class MyPlugin(Star):
 
     async def _handle_signal(self, signal: ReflexSignal) -> None:
         """处理单条 Reflex 信号。"""
-        logger.info(f"Handling signal: summary={signal.summary} events={len(signal.events)}")
+        logger.info(
+            f"Handling signal: level={signal.level} summary={signal.summary} events={len(signal.events)}"
+        )
         self._append_signal_cache(signal)
         self._append_event_cache(signal)
 
@@ -275,9 +277,12 @@ class MyPlugin(Star):
 
     def _build_signal_prompt(self, signal: ReflexSignal) -> str:
         """构建对用户通知的自然语言提示。"""
+        message = signal.message or signal.summary
         return (
             "You are an AI assistant that can sense its own system status.\n\n"
             "Recently you detected the following internal signals:\n\n"
+            f"Level: {signal.level}\n"
+            f"Message: {message}\n"
             f"Summary: {signal.summary}\n"
             f"Reason: {signal.reason}\n"
             f"Events Count: {len(signal.events)}\n\n"
@@ -331,6 +336,8 @@ class MyPlugin(Star):
         self._recent_signals.append(
             {
                 "timestamp": datetime.now().isoformat(),
+                "level": signal.level,
+                "message": signal.message,
                 "summary": signal.summary,
                 "reason": signal.reason,
                 "events_count": len(signal.events),

@@ -14,7 +14,9 @@ class ReflexSignal:
 
     push: bool
     summary: str
+    message: str
     reason: str
+    level: str
     events: List[Event]
 
 
@@ -30,13 +32,27 @@ class DecisionParser:
         json_text = self._extract_json(llm_text)
         if json_text is None:
             logger.debug("DecisionParser parse failed: no json object found")
-            return ReflexSignal(push=False, summary="", reason="invalid_json", events=events)
+            return ReflexSignal(
+                push=False,
+                summary="",
+                message="",
+                reason="invalid_json",
+                level=self._infer_level(events),
+                events=events,
+            )
 
         try:
             payload = json.loads(json_text)
         except (json.JSONDecodeError, TypeError):
             logger.debug("DecisionParser parse failed: invalid json payload")
-            return ReflexSignal(push=False, summary="", reason="invalid_json", events=events)
+            return ReflexSignal(
+                push=False,
+                summary="",
+                message="",
+                reason="invalid_json",
+                level=self._infer_level(events),
+                events=events,
+            )
 
         push_value = payload.get("push", False)
         if isinstance(push_value, bool):
@@ -47,9 +63,41 @@ class DecisionParser:
             push = bool(push_value)
 
         summary = str(payload.get("summary", ""))
+        message = str(payload.get("message", summary))
         reason = str(payload.get("reason", ""))
-        logger.debug(f"DecisionParser parsed signal: push={push} summary={summary}")
-        return ReflexSignal(push=push, summary=summary, reason=reason, events=events)
+        level = self._normalize_level(payload.get("level"), default=self._infer_level(events))
+        logger.debug(f"DecisionParser parsed signal: push={push} level={level} summary={summary}")
+        return ReflexSignal(
+            push=push,
+            summary=summary,
+            message=message,
+            reason=reason,
+            level=level,
+            events=events,
+        )
+
+    def _infer_level(self, events: List[Event]) -> str:
+        """根据事件列表推断信号级别。"""
+        if not events:
+            return "info"
+
+        order = {"info": 1, "warning": 2, "critical": 3}
+        highest = "info"
+        for event in events:
+            level = self._normalize_level(getattr(event.level, "value", event.level), default="info")
+            if order.get(level, 0) > order.get(highest, 0):
+                highest = level
+        return highest
+
+    def _normalize_level(self, value: object, default: str) -> str:
+        """将任意输入规范化为 info/warning/critical。"""
+        if value is None:
+            return default
+
+        level = str(value).strip().lower()
+        if level in {"info", "warning", "critical"}:
+            return level
+        return default
 
     def _extract_json(self, text: str) -> str | None:
         """从文本中提取 JSON 对象字符串。"""

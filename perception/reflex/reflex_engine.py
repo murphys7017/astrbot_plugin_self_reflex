@@ -107,7 +107,9 @@ class ReflexEngine:
                     signal = ReflexSignal(
                         push=False,
                         summary="",
+                        message="",
                         reason=f"llm_call_failed: {exc}",
+                        level="warning",
                         events=events,
                     )
                     logger.info(f"Reflex llm call failed: {repr(exc)}")
