@@ -145,7 +145,7 @@ class MyPlugin(Star):
         self.config = config
         self.perception_enabled = bool(self.config.get("perception_enabled", True))
         self._notify_unified_msg_origin = str(self.config.get("notify_unified_msg_origin", "")).strip()
-        self._notify_user_id = str(self.config.get("notify_user_id", "")).strip()
+        self._runtime_notify_unified_msg_origin = ""
         self._default_provider_id = str(self.config.get("default_provider_id", "")).strip()
 
         self._recent_signals: Deque[Dict[str, Any]] = deque(
@@ -190,6 +190,11 @@ class MyPlugin(Star):
     @filter.command("perception_status")
     async def perception_status(self, event: AstrMessageEvent):
         """查看当前 Perception 系统状态。"""
+        # 记录最近一次可回发会话，供主动通知使用。
+        if getattr(event, "unified_msg_origin", None):
+            self._runtime_notify_unified_msg_origin = str(event.unified_msg_origin)
+            logger.debug(f"Captured unified_msg_origin for notify: {self._runtime_notify_unified_msg_origin}")
+
         logger.debug(f"Command called: perception_status by={event.get_sender_name()}")
         if not self.perception_enabled:
             yield event.plain_result("Perception: disabled")
@@ -285,20 +290,18 @@ class MyPlugin(Star):
         return str(response)
 
     async def _send_notification(self, text: str) -> None:
-        """发送主动通知消息。优先使用 unified_msg_origin。"""
-        if self._notify_unified_msg_origin:
+        """发送主动通知消息。仅使用 unified_msg_origin。"""
+        target = self._notify_unified_msg_origin or self._runtime_notify_unified_msg_origin
+        if target:
             chain = MessageChain().message(text)
-            await self.context.send_message(self._notify_unified_msg_origin, chain)
+            await self.context.send_message(target, chain)
             logger.debug("Notification sent by unified_msg_origin")
             return
 
-        if self._notify_user_id:
-            # 兼容部分版本/适配器可能提供的 user_id 形式发送接口。
-            await self.context.send_message(user_id=self._notify_user_id, content=text)
-            logger.debug("Notification sent by user_id")
-            return
-
-        logger.warning("No notify target configured (notify_unified_msg_origin / notify_user_id).")
+        logger.warning(
+            "No notify target unified_msg_origin configured. "
+            "Set config.notify_unified_msg_origin or run /perception_status once to capture it."
+        )
 
     def _append_signal_cache(self, signal: ReflexSignal) -> None:
         """缓存近期信号摘要。"""

@@ -1,167 +1,184 @@
-# AstrBot Self Reflex
+# astrbot_plugin_self_reflex
 
-`astrbot_plugin_self_reflex` 是 AstrBot 的运行时反射系统插件。
+## 1. 项目标题
+**AstrBot Self Reflex: AI Perception System**
 
-它不是传统监控看板，而是面向 AI Runtime 的“低成本感知 + 本地趋势分析 + 按需上报”基础设施。
+## 2. 项目简介
+`astrbot_plugin_self_reflex` 是一个面向 AstrBot 的 **AI Perception System** 插件。  
+它的目标不是做传统监控看板，而是让 AI 具备“自我感知 -> 自我判断 -> 按需上报”的能力闭环。
 
-## 一、核心目标
+Self Reflex 持续采集运行时观测数据（Observation），做趋势分析（Trend），统一事件流（Event），再通过 LLM 判断是否需要对用户发出自然语言提醒。
 
-Reflex 的目标可以收敛为三点：
+## 3. Why Self Reflex
+在 AI Agent 场景中，系统健康状态会直接影响模型行为质量。  
+Self Reflex 解决的是“AI 如何感知自己正在发生什么”：
 
-1. 在低成本下持续感知运行环境。
-2. 快速识别异常和趋势变化。
-3. 只在必要时触发上报到 LLM 或通知用户。
+- 感知系统状态、日志、文件变化、异常行为
+- 在本地进行轻量趋势分析
+- 只将有价值的信号交给上层 LLM 或用户
+- 为后续自动修复（Self-Healing）打基础
 
-对应抽象链路：
-
-```text
-Collector (感知)
-    ↓
-TrendEngine (趋势分析/异常检测)
-    ↓
-Decision Layer (未来)
-```
-
-## 二、监控范围
-
-当前设计覆盖以下监控域：
-
-1. `Hardware`: CPU/内存/磁盘/GPU 等运行指标。
-2. `Logs`: system/application 日志中的异常模式。
-3. `Process`: 进程行为异常（高占用、数量异常、未知进程）。
-4. `Network`: 连接数、端口、流量等网络异常。
-5. `Filesystem`: 文件变化速率、空间突降等异常。
-6. `Security`（预留）：登录异常、权限变化、root 行为。
-
-## 三、数据模型
-
-Reflex 当前统一为三类记录：
-
-1. `CurrentMetric`: 单次采样的当前状态。
-2. `TrendMetric`: 基于时间窗口分析得到的趋势结果。
-3. `Event`: 结构化事件（日志异常/安全事件等）。
-
-基础字段：
-
-- `BaseRecord`: `source`, `timestamp`
-
-统一类型：
-
-```python
-ReflexRecord = Union[CurrentMetric, TrendMetric, Event]
-```
-
-## 四、数据流
-
-完整目标数据流：
+## 4. Architecture
+Self Reflex 的核心架构如下：
 
 ```text
 Collectors
-    ↓
-CurrentMetric
-    ↓
+   ↓
+ObservationStream
+   ↓
 TrendEngine
-    ↓
-TrendMetric
-    ↓
-ReflexDecision (future)
-    ↓
-LLM / User
+   ↓
+EventManager
+   ↓
+Reflex
+   ↓
+Signal
 ```
 
-当前阶段目标：
+职责说明：
+
+- **Collector**：采集 Observation
+- **Observation**：统一观测数据结构
+- **TrendEngine**：检测趋势或异常变化
+- **EventManager**：统一管理系统事件流
+- **Reflex**：使用 LLM 判断事件是否需要处理/上报
+
+## 5. Perception Pipeline
+完整处理链路：
+
+1. Collector 周期采集运行时数据，产生 `Observation`
+2. ObservationStream 进行时间窗口缓存与索引查询
+3. TrendEngine 按策略分析趋势，产出 `Trend` 或异常事件
+4. EventManager 统一接收事件（包括 Collector 异常、Trend 异常）
+5. Reflex 批量读取事件，调用 LLM 判断是否升级为 `Signal`
+6. 插件主入口消费 Signal，生成自然语言消息并通知用户
+
+## 6. Core Modules
+- **Collector**  
+  数据采集抽象层，支持能力标签（`required_capabilities`）按环境决定是否加载。
+
+- **ObservationStream**  
+  观测数据总线。支持时间窗口、source/metric 索引、按窗口查询。
+
+- **TrendEngine**  
+  按策略（metric + window + interval）分析趋势；无数据/异常会发事件。
+
+- **EventManager**  
+  异步事件队列，统一事件入口，队列满时丢弃最旧事件保留最新事件。
+
+- **Reflex**  
+  事件批处理 + Prompt 构建 + LLM 判断 + Signal 输出。
+
+- **PerceptionManager**  
+  总调度层，负责模块连接、生命周期管理、系统状态查询与趋势查询接口。
+
+## 7. Example Scenario
+以“内存持续增长”为例：
 
 ```text
-Collector -> TrendEngine
+MemoryCollector
+   ↓
+Observation(memory_usage)
+   ↓
+TrendEngine 识别持续上升趋势
+   ↓
+EventManager 生成/缓存事件
+   ↓
+Reflex 调用小模型判断是否升级
+   ↓
+Signal(push=true)
+   ↓
+插件调用对话 LLM生成提示并通知用户
 ```
 
-## 五、TrendEngine 设计
+最终用户收到类似：
+“我最近感知到内存占用持续上升，可能存在进程泄漏或任务堆积，建议检查最近启动的服务。”
 
-TrendEngine 负责时间序列分析与趋势判断，定位为 Reflex 的本地分析核心。
+## 8. Installation
+将插件克隆到 AstrBot 插件目录：
 
-建议首批趋势类型：
+```bash
+cd <AstrBot>/data/plugins
+git clone https://github.com/murphys7017/astrbot_plugin_self_reflex.git
+```
 
-1. `sustained_high`
-2. `sustained_low`
-3. `rising_fast`
-4. `falling_fast`
-5. `burst`
+然后重启 AstrBot。
 
-技术路线：
+## 9. Commands
+示例命令（面向用户）：
 
-1. 使用 `Sliding Window` 维护最近样本。
-2. 基于均值、斜率、变化率判定趋势。
-3. 输出标准 `TrendMetric`，供后续决策层使用。
+- `/perception status`
+- `/perception events`
 
-## 六、Collector 设计
+当前代码已实现命令：
 
-Collector 是可扩展的数据采集插件，统一接口如下：
+- `/perception_status`
 
-- `start()`
-- `stop()`
-- `collect() -> List[ReflexRecord]`
+> 说明：`/perception status` 与 `/perception events` 可作为后续命令别名/扩展目标。
 
-说明：当前接口允许返回 `ReflexRecord`，实践上 Collector 的主要输出应是 `CurrentMetric`；`TrendMetric` 通常由 TrendEngine 生成。
+## 10. Configuration
+插件配置使用 AstrBot 配置系统，配置定义在：
 
-建议起步实现：
+- `_conf_schema.json`
 
-1. `RandomCPUCollector`（用于联调）
-2. 再逐步替换为真实采集器（CPU/Memory/Disk/Process/Network）
+运行后配置会自动保存到：
 
-## 七、模块结构
+- `data/config/<plugin_name>_config.json`
 
-当前仓库（已实现）：
+常用配置项示例：
+
+- `perception_enabled`
+- `default_provider_id`（`select_provider`）
+- `notify_unified_msg_origin`
+- `reflex_batch_size`
+- `reflex_batch_timeout`
+- `reflex_rate_limit`
+
+## 11. Project Structure
+结构示例（概念层）：
 
 ```text
-core/
-├── models/
-│   ├── base.py
-│   ├── metric.py
-│   ├── trend.py
-│   ├── event.py
-│   ├── types.py
-│   └── __init__.py
-└── interfaces/
-    ├── collector.py
-    ├── sink.py
-    └── __init__.py
+astrbot_plugin_self_reflex/
+├── plugin/
+│   └── main.py
+└── perception/
+    ├── collectors/
+    ├── trend/
+    ├── events/
+    ├── reflex/
+    └── perception_manager.py
 ```
 
-规划中的下一步结构：
+当前仓库实现（实际路径）：
 
 ```text
-core/
-├── collectors/
-│   └── test_collector.py
-├── trend/
-│   ├── window.py
-│   ├── detector.py
-│   └── engine.py
-└── demo_pipeline.py
+astrbot_plugin_self_reflex/
+├── main.py
+├── _conf_schema.json
+└── perception/
+    ├── collectors/
+    ├── events/
+    ├── manager/
+    ├── models/
+    ├── reflex/
+    ├── stream/
+    ├── trend/
+    └── perception_manager.py
 ```
 
-## 八、开发路线
+## 12. Roadmap
+1. 增加更多 Collector
+- CPU
+- Memory
+- Logs
+- File changes
+- Network
 
-建议按以下顺序推进，避免反复重构：
+2. 与 `astrbot_plugin_self_code` 集成
+- Self Reflex 负责检测问题
+- Self Code 负责自动修改代码
+- 形成 **AI Self-Healing System**
 
-1. 实现 `trend/window.py`（窗口缓冲与滚动逻辑）。
-2. 实现 `trend/detector.py`（趋势判定规则）。
-3. 实现 `trend/engine.py`（统一输入输出编排）。
-4. 实现 `RandomCPUCollector`（生成可控测试数据）。
-5. 跑通 `collector -> trend engine` 的 demo pipeline。
-6. 接入真实采集器（CPU/Memory/Disk/Process/Network）。
-7. 增加日志与安全事件采集，产出 `Event`。
-8. 引入决策层（是否上报 LLM/是否通知用户）。
-
-## 九、设计收益
-
-1. 可扩展：Collector/Trend/Decision 各层独立演进。
-2. 低成本：趋势分析本地运行，不依赖 LLM 实时推理。
-3. 可控上报：只在必要时触发大模型或通知，节省 token。
-4. 可进化：后续可扩展自动自愈、自动重启、自动修复。
-
-## 十、参考链接
-
-- [AstrBot Repo](https://github.com/AstrBotDevs/AstrBot)
-- [AstrBot 插件开发文档（中文）](https://docs.astrbot.app/dev/star/plugin-new.html)
-- [AstrBot Plugin Dev Docs (EN)](https://docs.astrbot.app/en/dev/star/plugin-new.html)
+## 13. License
+本项目采用 **GNU Affero General Public License v3.0 (AGPL-3.0)**。  
+详见 [LICENSE](./LICENSE)。

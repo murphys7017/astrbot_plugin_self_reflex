@@ -8,20 +8,15 @@
   "default_provider_id": {
     "description": "Reflex 通知阶段使用的默认 LLM Provider ID",
     "type": "string",
+    "_special": "select_provider",
     "default": "",
-    "hint": "为空时尝试使用上下文默认 Provider"
+    "hint": "使用 AstrBot Provider 选择器选择模型，留空时尝试使用上下文默认 Provider"
   },
   "notify_unified_msg_origin": {
-    "description": "主动通知目标 unified_msg_origin",
+    "description": "主动通知目标 unified_msg_origin（会话唯一标识串）",
     "type": "string",
     "default": "",
-    "hint": "推荐使用此字段发送主动消息"
-  },
-  "notify_user_id": {
-    "description": "主动通知目标 user_id（兼容模式）",
-    "type": "string",
-    "default": "",
-    "hint": "仅在适配器支持 user_id 直发时有效"
+    "hint": "不是QQ号。可从 event.unified_msg_origin 获取并存储，之后用于 send_message(unified_msg_origin, chain)"
   },
   "stream_window_seconds": {
     "description": "ObservationStream 时间窗口（秒）",
