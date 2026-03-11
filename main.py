@@ -155,7 +155,7 @@ class MyPlugin(Star):
             maxlen=max(1, int(self.config.get("recent_events_cache", 200)))
         )
 
-        self.perception = PerceptionManager(
+        self.perception_manager = PerceptionManager(
             llm_generate=self._llm_generate_for_reflex,
             config=self._build_perception_config(),
         )
@@ -172,7 +172,7 @@ class MyPlugin(Star):
             logger.info("Perception is disabled by config.")
             return
 
-        await self.perception.start()
+        await self.perception_manager.start()
         self._signal_task = asyncio.create_task(self._signal_loop(), name="self_reflex.signal_loop")
         logger.info("Perception system started.")
 
@@ -184,41 +184,60 @@ class MyPlugin(Star):
             self._signal_task = None
 
         if self.perception_enabled:
-            await self.perception.stop()
+            await self.perception_manager.stop()
             logger.info("Perception system stopped.")
+
+    @filter.command("perception")
+    async def perception_command(self, event: AstrMessageEvent, action: str = "status"):
+        """
+        Perception 主命令。
+
+        支持：
+        - /perception bind
+        - /perception unbind
+        - /perception status
+        - /perception notify_test
+        """
+        action_norm = str(action or "status").strip().lower()
+        logger.debug(f"Command called: perception action={action_norm} by={event.get_sender_name()}")
+
+        if action_norm == "bind":
+            result = self._bind_notify_origin(event)
+            yield event.plain_result(result)
+            return
+
+        if action_norm == "unbind":
+            result = self._unbind_notify_origin()
+            yield event.plain_result(result)
+            return
+
+        if action_norm == "notify_test":
+            text = (
+                "Self Reflex 测试消息\n"
+                "如果你看到这条消息，说明通知系统工作正常。"
+            )
+            sent = await self._send_notification(text)
+            if sent:
+                yield event.plain_result("已发送测试通知。")
+            else:
+                yield event.plain_result("未绑定通知目标，请先执行 /perception bind。")
+            return
+
+        status_text = self._build_status_text(event)
+        yield event.plain_result(status_text)
 
     @filter.command("perception_status")
     async def perception_status(self, event: AstrMessageEvent):
-        """查看当前 Perception 系统状态。"""
-        # 记录最近一次可回发会话，供主动通知使用。
-        if getattr(event, "unified_msg_origin", None):
-            self._runtime_notify_unified_msg_origin = str(event.unified_msg_origin)
-            logger.debug(f"Captured unified_msg_origin for notify: {self._runtime_notify_unified_msg_origin}")
-
+        """兼容旧命令：查看当前 Perception 系统状态。"""
         logger.debug(f"Command called: perception_status by={event.get_sender_name()}")
-        if not self.perception_enabled:
-            yield event.plain_result("Perception: disabled")
-            return
-
-        status = self.perception.get_system_status()
-        last_signal = self._recent_signals[-1]["summary"] if self._recent_signals else "None"
-        text = (
-            "Perception System Status\n\n"
-            f"System: {'running' if status['running'] else 'stopped'}\n"
-            f"Collectors: {status['collectors_count']}\n"
-            f"Event Queue: {status['event_queue_size']}\n"
-            f"Signal Queue: {status['signal_queue_size']}\n"
-            f"Recent Signals(cache): {len(self._recent_signals)}\n"
-            f"Last Signal: {last_signal}"
-        )
-        yield event.plain_result(text)
+        yield event.plain_result(self._build_status_text(event))
 
     async def _signal_loop(self) -> None:
         """持续监听 Reflex 输出信号并执行通知。"""
         logger.info("Signal loop started")
         while True:
             try:
-                signal = await self.perception.get_signal()
+                signal = await self.perception_manager.get_signal()
                 await self._handle_signal(signal)
             except asyncio.CancelledError:
                 logger.info("Signal loop cancelled")
@@ -246,8 +265,11 @@ class MyPlugin(Star):
             return
 
         try:
-            await self._send_notification(text)
-            logger.info("Signal notification sent")
+            sent = await self._send_notification(text)
+            if sent:
+                logger.info("Signal notification sent")
+            else:
+                logger.debug("Signal notification skipped: no notify target bound")
         except Exception as exc:
             logger.error(f"signal notify failed: {exc}")
 
@@ -289,19 +311,20 @@ class MyPlugin(Star):
             return str(text)
         return str(response)
 
-    async def _send_notification(self, text: str) -> None:
+    async def _send_notification(self, text: str) -> bool:
         """发送主动通知消息。仅使用 unified_msg_origin。"""
-        target = self._notify_unified_msg_origin or self._runtime_notify_unified_msg_origin
+        target = self._get_notify_target()
         if target:
             chain = MessageChain().message(text)
             await self.context.send_message(target, chain)
             logger.debug("Notification sent by unified_msg_origin")
-            return
+            return True
 
         logger.warning(
             "No notify target unified_msg_origin configured. "
-            "Set config.notify_unified_msg_origin or run /perception_status once to capture it."
+            "Run /perception bind in the target session to bind notification destination."
         )
+        return False
 
     def _append_signal_cache(self, signal: ReflexSignal) -> None:
         """缓存近期信号摘要。"""
@@ -362,11 +385,80 @@ class MyPlugin(Star):
         logger.debug(f"Perception config mapped: keys={sorted(config.keys())}")
         return config
 
+    def _bind_notify_origin(self, event: AstrMessageEvent) -> str:
+        """将当前会话统一 ID 绑定为主动通知目标。"""
+        origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        if not origin:
+            logger.warning("Bind notify origin failed: event.unified_msg_origin is empty")
+            return "绑定失败：当前会话不支持 unified_msg_origin。"
+
+        self._runtime_notify_unified_msg_origin = origin
+        self._notify_unified_msg_origin = origin
+        self.config["notify_unified_msg_origin"] = origin
+        self._save_config()
+        logger.info(f"Notify origin bound: {origin}")
+        return "Self Reflex 通知已绑定到当前会话。\n未来系统异常将发送到这里。"
+
+    def _unbind_notify_origin(self) -> str:
+        """解除主动通知绑定。"""
+        self._runtime_notify_unified_msg_origin = ""
+        self._notify_unified_msg_origin = ""
+        self.config["notify_unified_msg_origin"] = ""
+        self._save_config()
+        logger.info("Notify origin unbound")
+        return "通知绑定已解除"
+
+    def _save_config(self) -> None:
+        """保存插件配置（若当前 AstrBot 版本支持）。"""
+        try:
+            if hasattr(self.config, "save_config"):
+                self.config.save_config()
+                logger.debug("Plugin config saved")
+        except Exception as exc:
+            logger.warning(f"Failed to save plugin config: {exc}")
+
+    def _get_notify_target(self) -> str:
+        """获取当前有效通知目标。优先配置值，其次运行时缓存值。"""
+        cfg_target = str(self.config.get("notify_unified_msg_origin", "") or "").strip()
+        if cfg_target:
+            return cfg_target
+        return str(self._runtime_notify_unified_msg_origin or "").strip()
+
+    def _build_status_text(self, event: AstrMessageEvent) -> str:
+        """构建 /perception status 输出。"""
+        current_origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+
+        notify_target = self._get_notify_target()
+        if notify_target and current_origin and notify_target == current_origin:
+            target_text = "当前会话"
+        elif notify_target:
+            target_text = "已绑定到其他会话"
+        else:
+            target_text = "未绑定"
+
+        if not self.perception_enabled:
+            return (
+                "Self Reflex Status\n\n"
+                "System: disabled\n"
+                f"Notification Target: {target_text}"
+            )
+
+        status = self.perception_manager.get_system_status()
+        last_signal = self._recent_signals[-1]["summary"] if self._recent_signals else "None"
+        return (
+            "Self Reflex Status\n\n"
+            f"System: {'running' if status['running'] else 'stopped'}\n"
+            f"Collectors: {status['collectors_count']}\n"
+            f"Recent Events: {len(self._recent_events)}\n"
+            f"Last Signal: {last_signal}\n"
+            f"Notification Target: {target_text}"
+        )
+
     def _register_tools(self) -> None:
         """注册 LLM Tool（兼容新旧 AstrBot 版本）。"""
         tools = [
-            GetSystemStatusTool(getter=self.perception.get_system_status),
-            GetCurrentSystemInfoTool(getter=self.perception.get_current_system_info),
+            GetSystemStatusTool(getter=self.perception_manager.get_system_status),
+            GetCurrentSystemInfoTool(getter=self.perception_manager.get_current_system_info),
             GetRecentSignalsTool(getter=self._get_recent_signals),
             GetRecentEventsTool(getter=self._get_recent_events),
         ]
