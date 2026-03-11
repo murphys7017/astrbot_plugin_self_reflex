@@ -3,6 +3,7 @@
 import asyncio
 from typing import Awaitable, Callable, List, Optional
 
+from astrbot.api import logger
 from perception.events import EventManager
 from perception.models import Event
 from perception.reflex.decision_parser import DecisionParser, ReflexSignal
@@ -30,6 +31,10 @@ class ReflexEngine:
         self.signal_queue: "asyncio.Queue[ReflexSignal]" = asyncio.Queue()
         self._last_call_time: Optional[float] = None
         self._running = False
+        logger.info(
+            f"ReflexEngine initialized: batch_size={self.batch_size} "
+            f"batch_timeout={self.batch_timeout} rate_limit={self.rate_limit}"
+        )
 
     async def _collect_batch(self) -> List[Event]:
         """
@@ -46,6 +51,7 @@ class ReflexEngine:
                     timeout=self.batch_timeout,
                 )
                 events: List[Event] = [first_event]
+                logger.debug(f"Reflex batch first event received: type={first_event.type}")
                 break
             except asyncio.TimeoutError:
                 continue
@@ -66,6 +72,7 @@ class ReflexEngine:
                 break
             events.append(event)
 
+        logger.debug(f"Reflex batch collected: size={len(events)}")
         return events
 
     async def _rate_limit_check(self) -> None:
@@ -77,37 +84,48 @@ class ReflexEngine:
         elapsed = now - self._last_call_time
         wait_time = self.rate_limit - elapsed
         if wait_time > 0:
+            logger.debug(f"Reflex rate limit sleep: {wait_time:.3f}s")
             await asyncio.sleep(wait_time)
 
     async def run(self) -> None:
         """Reflex 主循环。"""
         self._running = True
-        while self._running:
-            events = await self._collect_batch()
-            if not events:
-                continue
-            prompt = self.prompt_builder.build(events)
+        logger.info("ReflexEngine run loop started")
+        try:
+            while self._running:
+                events = await self._collect_batch()
+                if not events:
+                    continue
+                prompt = self.prompt_builder.build(events)
+                logger.debug(f"Reflex prompt built for events={len(events)}")
 
-            await self._rate_limit_check()
-            try:
-                llm_text = await self.llm_generate(prompt)
-                signal = self.decision_parser.parse(llm_text, events)
-            except Exception as exc:
-                signal = ReflexSignal(
-                    push=False,
-                    summary="",
-                    reason=f"llm_call_failed: {exc}",
-                    events=events,
-                )
-            finally:
-                self._last_call_time = asyncio.get_running_loop().time()
+                await self._rate_limit_check()
+                try:
+                    llm_text = await self.llm_generate(prompt)
+                    signal = self.decision_parser.parse(llm_text, events)
+                except Exception as exc:
+                    signal = ReflexSignal(
+                        push=False,
+                        summary="",
+                        reason=f"llm_call_failed: {exc}",
+                        events=events,
+                    )
+                    logger.info(f"Reflex llm call failed: {repr(exc)}")
+                finally:
+                    self._last_call_time = asyncio.get_running_loop().time()
 
-            if signal.push:
-                await self.signal_queue.put(signal)
+                if signal.push:
+                    await self.signal_queue.put(signal)
+                    logger.info(f"Reflex signal queued: summary={signal.summary}")
+                else:
+                    logger.debug(f"Reflex signal filtered: reason={signal.reason}")
+        finally:
+            logger.info("ReflexEngine run loop stopped")
 
     def stop(self) -> None:
         """停止主循环。"""
         self._running = False
+        logger.info("ReflexEngine stop requested")
 
     async def get_signal(self) -> ReflexSignal:
         """获取一条 Reflex 信号。"""

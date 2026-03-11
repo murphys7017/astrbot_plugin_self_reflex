@@ -3,6 +3,7 @@
 from datetime import timedelta
 from typing import List, Optional
 
+from astrbot.api import logger
 from perception.models import Observation, Trend, TrendDirection
 from perception.trend.strategy import BaseTrendStrategy
 
@@ -35,10 +36,12 @@ class CollectorTrendStrategy(BaseTrendStrategy):
 
     def compute_trend(self, observations: List[Observation]) -> Optional[Trend]:
         if not observations:
+            logger.debug("CollectorTrendStrategy: empty observations, skip")
             return None
 
         metric_observations = [obs for obs in observations if obs.metric == self.metric]
         if not metric_observations:
+            logger.debug(f"CollectorTrendStrategy: no matched metric={self.metric}")
             return None
 
         metric_observations.sort(key=lambda o: o.timestamp)
@@ -53,6 +56,7 @@ class CollectorTrendStrategy(BaseTrendStrategy):
                 continue
 
         if not numeric_observations:
+            logger.debug(f"CollectorTrendStrategy: no numeric observations for metric={self.metric}")
             return None
 
         start_obs = numeric_observations[0]

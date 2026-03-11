@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from importlib import import_module
 from typing import Dict, Iterable, List, Optional
 
+from astrbot.api import logger
 from perception.collectors import BaseCollector
 from perception.events import EventManager
 from perception.models import Event, EventLevel, Observation
@@ -80,6 +81,10 @@ class CollectorManager:
         self.event_manager = event_manager
         self.event_queue = self.event_manager.queue()
         self._running = False
+        logger.info(
+            f"CollectorManager initialized: default_interval={int(self.default_interval.total_seconds())}s "
+            f"rate_limit={self.rate_limit} no_data_threshold={self.no_data_threshold}"
+        )
 
     def register(self, collector: BaseCollector) -> None:
         """注册 Collector。"""
@@ -88,11 +93,13 @@ class CollectorManager:
 
         self.collectors[collector.name] = collector
         self.states[collector.name] = CollectorState(name=collector.name)
+        logger.info(f"Collector registered: {collector.name} (interval={collector.interval}s)")
 
     def unregister(self, collector_name: str) -> None:
         """注销 Collector。"""
         self.collectors.pop(collector_name, None)
         self.states.pop(collector_name, None)
+        logger.info(f"Collector unregistered: {collector_name}")
 
     def load_plugin(self, module_path: str, class_name: str, *args: object, **kwargs: object) -> BaseCollector:
         """
@@ -110,6 +117,7 @@ class CollectorManager:
         if not isinstance(collector, BaseCollector):
             raise TypeError(f"{module_path}.{class_name} 不是 BaseCollector 子类")
         self.register(collector)
+        logger.info(f"Collector plugin loaded: {module_path}.{class_name}")
         return collector
 
     async def run(self, tick_interval: float = 0.5) -> None:
@@ -120,16 +128,19 @@ class CollectorManager:
             tick_interval: 调度心跳间隔（秒）。
         """
         self._running = True
+        logger.info(f"CollectorManager run loop started (tick_interval={tick_interval})")
         try:
             while self._running:
                 await self.tick()
                 await asyncio.sleep(tick_interval)
         finally:
             self._running = False
+            logger.info("CollectorManager run loop stopped")
 
     def stop(self) -> None:
         """停止 run() 循环。"""
         self._running = False
+        logger.info("CollectorManager stop requested")
 
     async def tick(self) -> None:
         """
@@ -153,6 +164,7 @@ class CollectorManager:
 
         if tasks:
             await asyncio.gather(*tasks)
+            logger.debug(f"Collector tick executed: scheduled={len(tasks)}")
 
         await self._monitor_health()
 
@@ -173,16 +185,24 @@ class CollectorManager:
         if state.first_run_at is None:
             state.first_run_at = now
         state.last_run = now
+        logger.debug(f"Collector run started: {collector.name}")
 
         try:
             observations = await self._collect_observations(collector)
             limited = self.apply_rate_limit(observations)
+            logger.debug(
+                f"Collector run result: {collector.name} raw={len(observations)} limited={len(limited)}"
+            )
             if limited:
                 self.stream.push_many(limited)
                 state.last_push = datetime.now()
                 state.consecutive_no_data = 0
             else:
                 state.consecutive_no_data += 1
+                logger.debug(
+                    f"Collector no-data count increased: {collector.name} "
+                    f"count={state.consecutive_no_data}"
+                )
                 if state.consecutive_no_data >= self.no_data_threshold:
                     await self._emit_event(
                         event_type="CollectorNoDataEvent",
@@ -195,13 +215,16 @@ class CollectorManager:
                         },
                     )
                     state.consecutive_no_data = 0
+                    logger.info(f"Collector no-data threshold reached: {collector.name}")
 
             state.last_success = datetime.now()
             state.error_count = 0
             state.status = "RUNNING"
+            logger.debug(f"Collector run success: {collector.name}")
         except asyncio.TimeoutError:
             state.error_count += 1
             state.status = "ERROR"
+            logger.info(f"Collector run timeout: {collector.name}")
             await self._emit_event(
                 event_type="CollectorTimeoutEvent",
                 level=EventLevel.WARNING,
@@ -211,6 +234,7 @@ class CollectorManager:
         except Exception as exc:
             state.error_count += 1
             state.status = "ERROR"
+            logger.info(f"Collector run error: {collector.name} error={repr(exc)}")
             await self._emit_event(
                 event_type="CollectorErrorEvent",
                 level=EventLevel.CRITICAL,
@@ -237,6 +261,7 @@ class CollectorManager:
 
             if elapsed > interval and state.status == "RUNNING":
                 state.status = "ERROR"
+                logger.info(f"Collector unhealthy timeout: {name} elapsed={elapsed.total_seconds():.2f}s")
                 await self._emit_event(
                     event_type="CollectorTimeoutEvent",
                     level=EventLevel.WARNING,
@@ -250,6 +275,7 @@ class CollectorManager:
 
             if elapsed > interval * self.offline_factor and state.status != "OFFLINE":
                 state.status = "OFFLINE"
+                logger.info(f"Collector marked offline: {name} elapsed={elapsed.total_seconds():.2f}s")
                 await self._emit_event(
                     event_type="CollectorOfflineEvent",
                     level=EventLevel.CRITICAL,
@@ -313,6 +339,7 @@ class CollectorManager:
             context=context or {},
         )
         await self.event_manager.submit_event(event)
+        logger.debug(f"Collector event emitted: type={event_type} level={level.value}")
 
     @staticmethod
     def _collect_sync(collector: BaseCollector) -> Iterable[Observation]:

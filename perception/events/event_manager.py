@@ -3,6 +3,7 @@
 import asyncio
 from typing import AsyncIterator
 
+from astrbot.api import logger
 from perception.models import Event
 
 
@@ -17,6 +18,7 @@ class EventManager:
             max_queue_size: 事件队列最大长度。
         """
         self._queue: "asyncio.Queue[Event]" = asyncio.Queue(maxsize=max_queue_size)
+        logger.info(f"EventManager initialized: max_queue_size={max_queue_size}")
 
     async def submit_event(self, event: Event) -> None:
         """
@@ -26,12 +28,18 @@ class EventManager:
         """
         if self._queue.full():
             self._queue.get_nowait()
+            logger.debug("EventManager queue full: dropped oldest event")
         self._queue.put_nowait(event)
+        logger.debug(
+            f"Event submitted: type={event.type} level={event.level.value} size={self._queue.qsize()}"
+        )
 
     async def events(self) -> AsyncIterator[Event]:
         """持续输出事件流，供上层模块异步消费。"""
         while True:
-            yield await self._queue.get()
+            event = await self._queue.get()
+            logger.debug(f"Event consumed from async iterator: type={event.type}")
+            yield event
 
     async def submit(self, event: Event) -> None:
         """兼容旧接口：提交事件。"""
@@ -39,7 +47,9 @@ class EventManager:
 
     async def get(self) -> Event:
         """兼容旧接口：从队列中获取一个事件。"""
-        return await self._queue.get()
+        event = await self._queue.get()
+        logger.debug(f"Event consumed from get(): type={event.type}")
+        return event
 
     def queue(self) -> "asyncio.Queue[Event]":
         """返回内部事件队列，供上层模块直接消费。"""

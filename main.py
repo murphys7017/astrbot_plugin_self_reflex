@@ -39,6 +39,7 @@ class GetSystemStatusTool(FunctionTool[AstrAgentContext]):
     async def call(self, context: ContextWrapper[AstrAgentContext], **kwargs: Any) -> ToolExecResult:
         _ = context
         _ = kwargs
+        logger.debug("Tool called: get_system_status")
         return json.dumps(self.getter(), ensure_ascii=False, default=str)
 
 
@@ -63,6 +64,7 @@ class GetCurrentSystemInfoTool(FunctionTool[AstrAgentContext]):
     async def call(self, context: ContextWrapper[AstrAgentContext], **kwargs: Any) -> ToolExecResult:
         _ = context
         _ = kwargs
+        logger.debug("Tool called: get_current_system_info")
         return json.dumps(self.getter(), ensure_ascii=False, default=str)
 
 
@@ -96,6 +98,7 @@ class GetRecentSignalsTool(FunctionTool[AstrAgentContext]):
             limit = max(1, int(limit_raw))
         except (TypeError, ValueError):
             limit = 10
+        logger.debug(f"Tool called: get_recent_signals limit={limit}")
         return json.dumps(self.getter(limit), ensure_ascii=False, default=str)
 
 
@@ -129,6 +132,7 @@ class GetRecentEventsTool(FunctionTool[AstrAgentContext]):
             limit = max(1, int(limit_raw))
         except (TypeError, ValueError):
             limit = 20
+        logger.debug(f"Tool called: get_recent_events limit={limit}")
         return json.dumps(self.getter(limit), ensure_ascii=False, default=str)
 
 
@@ -157,6 +161,10 @@ class MyPlugin(Star):
         )
         self._signal_task: Optional[asyncio.Task[Any]] = None
         self._register_tools()
+        logger.info(
+            f"Plugin initialized: perception_enabled={self.perception_enabled} "
+            f"provider_id={self._default_provider_id or '<default>'}"
+        )
 
     async def initialize(self):
         """插件初始化：启动 Perception 与后台 signal loop。"""
@@ -182,7 +190,7 @@ class MyPlugin(Star):
     @filter.command("perception_status")
     async def perception_status(self, event: AstrMessageEvent):
         """查看当前 Perception 系统状态。"""
-        _ = event
+        logger.debug(f"Command called: perception_status by={event.get_sender_name()}")
         if not self.perception_enabled:
             yield event.plain_result("Perception: disabled")
             return
@@ -202,11 +210,13 @@ class MyPlugin(Star):
 
     async def _signal_loop(self) -> None:
         """持续监听 Reflex 输出信号并执行通知。"""
+        logger.info("Signal loop started")
         while True:
             try:
                 signal = await self.perception.get_signal()
                 await self._handle_signal(signal)
             except asyncio.CancelledError:
+                logger.info("Signal loop cancelled")
                 raise
             except Exception as exc:
                 logger.error(f"signal loop error: {exc}")
@@ -214,6 +224,7 @@ class MyPlugin(Star):
 
     async def _handle_signal(self, signal: ReflexSignal) -> None:
         """处理单条 Reflex 信号。"""
+        logger.info(f"Handling signal: summary={signal.summary} events={len(signal.events)}")
         self._append_signal_cache(signal)
         self._append_event_cache(signal)
 
@@ -226,10 +237,12 @@ class MyPlugin(Star):
             return
 
         if not text:
+            logger.debug("Signal notification skipped: empty llm text")
             return
 
         try:
             await self._send_notification(text)
+            logger.info("Signal notification sent")
         except Exception as exc:
             logger.error(f"signal notify failed: {exc}")
 
@@ -248,11 +261,13 @@ class MyPlugin(Star):
 
     async def _llm_generate_for_reflex(self, prompt: str) -> str:
         """提供给 Perception ReflexEngine 的 LLM 生成函数。"""
+        logger.debug(f"Reflex llm_generate called with prompt length={len(prompt)}")
         resp = await self._call_llm(prompt)
         return self._extract_completion_text(resp)
 
     async def _call_llm(self, prompt: str) -> Any:
         """调用 AstrBot LLM 接口。"""
+        logger.debug(f"Calling LLM for prompt length={len(prompt)}")
         if self._default_provider_id:
             return await self.context.llm_generate(
                 chat_provider_id=self._default_provider_id,
@@ -274,11 +289,13 @@ class MyPlugin(Star):
         if self._notify_unified_msg_origin:
             chain = MessageChain().message(text)
             await self.context.send_message(self._notify_unified_msg_origin, chain)
+            logger.debug("Notification sent by unified_msg_origin")
             return
 
         if self._notify_user_id:
             # 兼容部分版本/适配器可能提供的 user_id 形式发送接口。
             await self.context.send_message(user_id=self._notify_user_id, content=text)
+            logger.debug("Notification sent by user_id")
             return
 
         logger.warning("No notify target configured (notify_unified_msg_origin / notify_user_id).")
@@ -293,6 +310,7 @@ class MyPlugin(Star):
                 "events_count": len(signal.events),
             }
         )
+        logger.debug(f"Signal cache updated: size={len(self._recent_signals)}")
 
     def _append_event_cache(self, signal: ReflexSignal) -> None:
         """从信号内携带事件缓存近期事件快照。"""
@@ -307,6 +325,7 @@ class MyPlugin(Star):
                     "context": event.context,
                 }
             )
+        logger.debug(f"Event cache updated: size={len(self._recent_events)}")
 
     def _get_recent_signals(self, limit: int = 10) -> List[Dict[str, Any]]:
         """获取近期信号。"""
@@ -336,7 +355,9 @@ class MyPlugin(Star):
             "reflex_batch_timeout": self.config.get("reflex_batch_timeout"),
             "reflex_rate_limit": self.config.get("reflex_rate_limit"),
         }
-        return {k: v for k, v in mapping.items() if v is not None}
+        config = {k: v for k, v in mapping.items() if v is not None}
+        logger.debug(f"Perception config mapped: keys={sorted(config.keys())}")
+        return config
 
     def _register_tools(self) -> None:
         """注册 LLM Tool（兼容新旧 AstrBot 版本）。"""
@@ -349,8 +370,10 @@ class MyPlugin(Star):
 
         if hasattr(self.context, "add_llm_tools"):
             self.context.add_llm_tools(*tools)
+            logger.info(f"LLM tools registered by add_llm_tools: count={len(tools)}")
             return
 
         tool_mgr = self.context.provider_manager.llm_tools
         for tool in tools:
             tool_mgr.func_list.append(tool)
+        logger.info(f"LLM tools registered by legacy manager: count={len(tools)}")

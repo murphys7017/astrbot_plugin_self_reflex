@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, Iterable, List, Optional
 
+from astrbot.api import logger
 from perception.models import Observation
 
 
@@ -31,6 +32,7 @@ class ObservationStream:
         self.buffer = []
         self.index = defaultdict(lambda: defaultdict(list))
         self.time_window = time_window
+        logger.info(f"ObservationStream initialized: time_window={self.time_window.total_seconds()}s")
 
     def push(self, obs: Observation) -> None:
         """
@@ -40,10 +42,12 @@ class ObservationStream:
             obs: 单条观测数据。
         """
         if self._should_drop(obs):
+            logger.debug(f"Observation dropped by stream hook: metric={obs.metric} source={obs.source.value}")
             return
 
         self._append(obs)
         self._cleanup()
+        logger.debug(f"Observation pushed: metric={obs.metric} buffer_size={len(self.buffer)}")
 
     def push_many(self, observations: Iterable[Observation]) -> None:
         """
@@ -61,6 +65,7 @@ class ObservationStream:
 
         if has_new_data:
             self._cleanup()
+            logger.debug(f"Observations pushed in batch: buffer_size={len(self.buffer)}")
 
     def get_window(
         self,
@@ -103,6 +108,7 @@ class ObservationStream:
         for obs in candidates:
             if start <= obs.timestamp <= end:
                 results.append(obs)
+        logger.debug(f"Observation window query: source={source} metric={metric} results={len(results)}")
         return results
 
     def _cleanup(self) -> None:
@@ -120,6 +126,10 @@ class ObservationStream:
 
         if len(self.buffer) != original_size:
             self._rebuild_index()
+            logger.debug(
+                f"Observation cleanup executed: removed={original_size - len(self.buffer)} "
+                f"remaining={len(self.buffer)}"
+            )
 
     def _append(self, obs: Observation) -> None:
         """向 buffer 追加数据并增量更新 index。"""

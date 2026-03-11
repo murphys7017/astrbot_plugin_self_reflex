@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import List
 
+from astrbot.api import logger
 from perception.models import Event
 
 
@@ -28,11 +29,13 @@ class DecisionParser:
         """
         json_text = self._extract_json(llm_text)
         if json_text is None:
+            logger.debug("DecisionParser parse failed: no json object found")
             return ReflexSignal(push=False, summary="", reason="invalid_json", events=events)
 
         try:
             payload = json.loads(json_text)
         except (json.JSONDecodeError, TypeError):
+            logger.debug("DecisionParser parse failed: invalid json payload")
             return ReflexSignal(push=False, summary="", reason="invalid_json", events=events)
 
         push_value = payload.get("push", False)
@@ -45,6 +48,7 @@ class DecisionParser:
 
         summary = str(payload.get("summary", ""))
         reason = str(payload.get("reason", ""))
+        logger.debug(f"DecisionParser parsed signal: push={push} summary={summary}")
         return ReflexSignal(push=push, summary=summary, reason=reason, events=events)
 
     def _extract_json(self, text: str) -> str | None:
@@ -68,4 +72,5 @@ class DecisionParser:
         end = raw.rfind("}")
         if start == -1 or end == -1 or end <= start:
             return None
+        # 允许模型输出解释文本，提取最外层 JSON 片段用于解析。
         return raw[start : end + 1]

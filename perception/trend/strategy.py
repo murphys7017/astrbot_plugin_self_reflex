@@ -23,6 +23,7 @@ class BaseTrendStrategy(ABC):
     _last_run: Optional[float]
 
     def __init__(self, metric: str, window: timedelta, interval: Optional[timedelta] = None) -> None:
+        # interval 默认复用 window，保证“窗口采样”与“调度频率”一致。
         self.metric = metric
         self.window = window
         self.interval = interval if interval is not None else window

@@ -2,6 +2,7 @@
 
 from typing import List
 
+from astrbot.api import logger
 from perception.models import Event
 
 
@@ -10,6 +11,7 @@ class PromptBuilder:
 
     def build(self, events: List[Event]) -> str:
         """构建用于事件升级判断的 Prompt。"""
+        # Prompt 保持结构化，便于模型稳定输出 JSON。
         lines = [
             "You are a system perception filter.",
             "",
@@ -34,4 +36,5 @@ class PromptBuilder:
                 "}",
             ]
         )
+        logger.debug(f"Reflex prompt built in PromptBuilder: events={len(events)}")
         return "\n".join(lines)

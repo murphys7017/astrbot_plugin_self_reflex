@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from importlib import import_module
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+from astrbot.api import logger
 from perception.collectors import BaseCollector
 from perception.events import EventManager
 from perception.manager import CollectorManager
@@ -47,8 +48,11 @@ class PerceptionManager:
         if config:
             cfg.update(config)
         self.config = cfg
+        logger.info("PerceptionManager initializing")
 
+        # 统一事件总线：确保 Collector / Trend / Reflex 共享同一个 EventManager。
         self.event_manager = EventManager(max_queue_size=int(cfg["event_queue_size"]))
+        # ObservationStream 是全局观测缓存，TrendEngine 与 CollectorManager 共享它。
         self.stream = ObservationStream(
             time_window=timedelta(seconds=float(cfg["stream_window_seconds"]))
         )
@@ -77,10 +81,16 @@ class PerceptionManager:
         self._trend_interval = timedelta(seconds=float(cfg["trend_interval_seconds"]))
         self._tasks: List[asyncio.Task[Any]] = []
         self._running = False
+        logger.info(
+            f"PerceptionManager initialized: stream_window={int(float(cfg['stream_window_seconds']))}s "
+            f"collector_tick={self._collector_tick_interval} "
+            f"trend_interval={self._trend_interval.total_seconds()}s"
+        )
 
     async def start(self) -> None:
         """启动 Perception 子系统任务。"""
         if self._running:
+            logger.debug("PerceptionManager start skipped: already running")
             return
 
         self._running = True
@@ -102,10 +112,12 @@ class PerceptionManager:
                 name="perception.reflex_engine",
             )
         )
+        logger.info(f"PerceptionManager started with {len(self._tasks)} tasks")
 
     async def stop(self) -> None:
         """停止 Perception 子系统任务。"""
         if not self._running:
+            logger.debug("PerceptionManager stop skipped: already stopped")
             return
 
         self.collector_manager.stop()
@@ -120,6 +132,7 @@ class PerceptionManager:
 
         self._tasks.clear()
         self._running = False
+        logger.info("PerceptionManager stopped")
 
     def register_collector(self, collector: BaseCollector) -> bool:
         """
@@ -130,9 +143,11 @@ class PerceptionManager:
             False: 当前系统不满足 collector 所需能力，未加载
         """
         if not self._can_load_collector(collector):
+            logger.info(f"Collector skipped due to missing capabilities: {collector.name}")
             return False
 
         self.collector_manager.register(collector)
+        logger.info(f"Collector accepted by PerceptionManager: {collector.name}")
         return True
 
     def load_collector_plugin(self, module_path: str, class_name: str, *args: object, **kwargs: object) -> bool:
@@ -148,18 +163,22 @@ class PerceptionManager:
         collector = collector_cls(*args, **kwargs)
         if not isinstance(collector, BaseCollector):
             raise TypeError(f"{module_path}.{class_name} 不是 BaseCollector 子类")
+        logger.debug(f"Collector plugin instantiated: {module_path}.{class_name}")
         return self.register_collector(collector)
 
     def register_trend_strategy(self, strategy: BaseTrendStrategy) -> None:
         """注册趋势策略。"""
         self.trend_engine.register_strategy(strategy)
+        logger.info(f"Trend strategy registered: metric={strategy.metric}")
 
     async def get_signal(self) -> ReflexSignal:
         """获取一条 Reflex 输出信号。"""
+        logger.debug("PerceptionManager waiting for signal")
         return await self.reflex_engine.get_signal()
 
     def get_system_status(self) -> Dict[str, Any]:
         """获取系统整体运行状态。"""
+        # 该接口用于命令面板/工具函数读取运行状态，需返回可序列化结构。
         return {
             "running": self._running,
             "collectors_count": len(self.collector_manager.collectors),
@@ -225,6 +244,10 @@ class PerceptionManager:
         if not required:
             return True
         current = set(self.get_current_system_info()["capabilities"])
+        logger.debug(
+            f"Collector capability check: name={collector.name} "
+            f"required={sorted(required)} current={sorted(current)}"
+        )
         return required.issubset(current)
 
     def _to_json_safe(self, value: Any) -> Any:
