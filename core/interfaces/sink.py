@@ -1,4 +1,4 @@
-"""Sink interface for reflex records."""
+"""Reflex 记录输出端接口定义。"""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from ..models.types import ReflexRecord
 
 
 class RecordSink(ABC):
-    """Base interface for consuming reflex records."""
+    """记录下沉（输出）抽象接口。"""
 
     @abstractmethod
     async def emit(self, record: ReflexRecord) -> None:
-        """Emit a single reflex record to an output target."""
+        """异步输出一条 Reflex 记录。"""

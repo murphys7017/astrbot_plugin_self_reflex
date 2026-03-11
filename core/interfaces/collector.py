@@ -1,4 +1,4 @@
-"""Collector interface for reflex records."""
+"""Reflex 记录采集器接口定义。"""
 
 from __future__ import annotations
 
@@ -11,19 +11,21 @@ from ..models.types import ReflexRecord
 
 @dataclass(slots=True)
 class BaseCollector(ABC):
-    """Base interface for record collectors."""
+    """采集器抽象基类。"""
 
+    # 采集器名称，用于标识数据来源
     name: str
+    # 采集周期（秒）
     interval: float
 
     @abstractmethod
     def start(self) -> None:
-        """Start the collector lifecycle."""
+        """启动采集器生命周期。"""
 
     @abstractmethod
     def stop(self) -> None:
-        """Stop the collector lifecycle."""
+        """停止采集器生命周期。"""
 
     @abstractmethod
     def collect(self) -> List[ReflexRecord]:
-        """Collect a batch of reflex records."""
+        """采集一批 Reflex 记录。"""

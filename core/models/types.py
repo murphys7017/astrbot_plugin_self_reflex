@@ -1,4 +1,4 @@
-"""Shared type aliases for reflex records."""
+"""Reflex 记录的共享类型定义。"""
 
 from __future__ import annotations
 
@@ -13,3 +13,4 @@ ReflexRecord = Union[
     TrendMetric,
     Event,
 ]
+"""统一的记录类型别名，用于接口层声明输入/输出。"""
