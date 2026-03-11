@@ -14,8 +14,8 @@ from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
 
-from perception.perception_manager import PerceptionManager
-from perception.reflex import ReflexSignal
+from .perception.perception_manager import PerceptionManager
+from .perception.reflex import ReflexSignal
 
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))

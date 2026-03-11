@@ -4,10 +4,10 @@ import asyncio
 from typing import Awaitable, Callable, List, Optional
 
 from astrbot.api import logger
-from perception.events import EventManager
-from perception.models import Event
-from perception.reflex.decision_parser import DecisionParser, ReflexSignal
-from perception.reflex.prompt_builder import PromptBuilder
+from ..events import EventManager
+from ..models import Event
+from .decision_parser import DecisionParser, ReflexSignal
+from .prompt_builder import PromptBuilder
 
 
 class ReflexEngine:

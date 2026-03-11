@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Iterable, List, Optional
 
 from astrbot.api import logger
-from perception.models import Observation
+from ..models import Observation
 
 
 class ObservationStream:

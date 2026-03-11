@@ -5,10 +5,10 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 from astrbot.api import logger
-from perception.events import EventManager
-from perception.models import Event, EventLevel, Trend
-from perception.stream import ObservationStream
-from perception.trend.strategy import BaseTrendStrategy
+from ..events import EventManager
+from ..models import Event, EventLevel, Trend
+from ..stream import ObservationStream
+from .strategy import BaseTrendStrategy
 
 
 class TrendEngine:

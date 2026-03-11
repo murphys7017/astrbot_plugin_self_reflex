@@ -4,8 +4,8 @@ from datetime import timedelta
 from typing import List, Optional
 
 from astrbot.api import logger
-from perception.models import Observation, Trend, TrendDirection
-from perception.trend.strategy import BaseTrendStrategy
+from ..models import Observation, Trend, TrendDirection
+from .strategy import BaseTrendStrategy
 
 
 class CollectorTrendStrategy(BaseTrendStrategy):

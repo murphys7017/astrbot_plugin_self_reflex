@@ -11,13 +11,13 @@ from importlib import import_module
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from astrbot.api import logger
-from perception.collectors import BaseCollector
-from perception.events import EventManager
-from perception.manager import CollectorManager
-from perception.models import Trend
-from perception.reflex import ReflexEngine, ReflexSignal
-from perception.stream import ObservationStream
-from perception.trend import BaseTrendStrategy, TrendEngine
+from .collectors import BaseCollector
+from .events import EventManager
+from .manager import CollectorManager
+from .models import Trend
+from .reflex import ReflexEngine, ReflexSignal
+from .stream import ObservationStream
+from .trend import BaseTrendStrategy, TrendEngine
 
 
 DEFAULT_CONFIG: Dict[str, Any] = {

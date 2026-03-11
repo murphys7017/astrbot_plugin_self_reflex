@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from datetime import timedelta
 from typing import List, Optional
 
-from perception.models import Observation, Trend
+from ..models import Observation, Trend
 
 
 class BaseTrendStrategy(ABC):

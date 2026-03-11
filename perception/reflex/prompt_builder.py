@@ -3,7 +3,7 @@
 from typing import List
 
 from astrbot.api import logger
-from perception.models import Event
+from ..models import Event
 
 
 class PromptBuilder:

@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Iterable, Optional, Set
 
-from perception.models import Observation
+from ..models import Observation
 
 
 class BaseCollector(ABC):

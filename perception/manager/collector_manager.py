@@ -8,10 +8,10 @@ from importlib import import_module
 from typing import Dict, Iterable, List, Optional
 
 from astrbot.api import logger
-from perception.collectors import BaseCollector
-from perception.events import EventManager
-from perception.models import Event, EventLevel, Observation
-from perception.stream import ObservationStream
+from ..collectors import BaseCollector
+from ..events import EventManager
+from ..models import Event, EventLevel, Observation
+from ..stream import ObservationStream
 
 
 @dataclass
