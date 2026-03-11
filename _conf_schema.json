@@ -1,0 +1,96 @@
+{
+  "perception_enabled": {
+    "description": "是否启用 Perception 系统",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后不会启动任何感知任务"
+  },
+  "default_provider_id": {
+    "description": "Reflex 通知阶段使用的默认 LLM Provider ID",
+    "type": "string",
+    "default": "",
+    "hint": "为空时尝试使用上下文默认 Provider"
+  },
+  "notify_unified_msg_origin": {
+    "description": "主动通知目标 unified_msg_origin",
+    "type": "string",
+    "default": "",
+    "hint": "推荐使用此字段发送主动消息"
+  },
+  "notify_user_id": {
+    "description": "主动通知目标 user_id（兼容模式）",
+    "type": "string",
+    "default": "",
+    "hint": "仅在适配器支持 user_id 直发时有效"
+  },
+  "stream_window_seconds": {
+    "description": "ObservationStream 时间窗口（秒）",
+    "type": "int",
+    "default": 300
+  },
+  "collector_tick_interval": {
+    "description": "CollectorManager 调度心跳（秒）",
+    "type": "float",
+    "default": 0.5
+  },
+  "trend_interval_seconds": {
+    "description": "TrendEngine 分析周期（秒）",
+    "type": "float",
+    "default": 5.0
+  },
+  "collector_default_interval_seconds": {
+    "description": "Collector 默认采集间隔（秒）",
+    "type": "int",
+    "default": 5
+  },
+  "collector_rate_limit": {
+    "description": "Collector 每次最大推送 Observation 数",
+    "type": "int",
+    "default": 200
+  },
+  "collector_no_data_threshold": {
+    "description": "Collector 连续空采集触发阈值",
+    "type": "int",
+    "default": 50
+  },
+  "collector_timeout_seconds": {
+    "description": "Collector 单次采集超时（秒）",
+    "type": "float",
+    "default": 3.0
+  },
+  "collector_offline_factor": {
+    "description": "Collector 离线判定倍率",
+    "type": "int",
+    "default": 3
+  },
+  "event_queue_size": {
+    "description": "EventManager 队列大小",
+    "type": "int",
+    "default": 1000
+  },
+  "reflex_batch_size": {
+    "description": "Reflex 单批事件上限",
+    "type": "int",
+    "default": 10
+  },
+  "reflex_batch_timeout": {
+    "description": "Reflex 批次等待超时（秒）",
+    "type": "float",
+    "default": 5.0
+  },
+  "reflex_rate_limit": {
+    "description": "Reflex LLM 最小调用间隔（秒）",
+    "type": "float",
+    "default": 10.0
+  },
+  "recent_signals_cache": {
+    "description": "插件内缓存最近信号条数",
+    "type": "int",
+    "default": 50
+  },
+  "recent_events_cache": {
+    "description": "插件内缓存最近事件条数",
+    "type": "int",
+    "default": 200
+  }
+}

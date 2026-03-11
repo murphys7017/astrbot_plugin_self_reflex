@@ -36,7 +36,7 @@ class ReflexEngine:
         采集一批事件。
 
         - 最多收集 batch_size 条
-        - 首条事件无超时阻塞等待
+        - 首条事件按 batch_timeout 轮询等待（便于 stop() 快速生效）
         - 收到首条后最多再等待 batch_timeout 收集后续事件
         """
         while self._running:

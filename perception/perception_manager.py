@@ -6,7 +6,7 @@ import platform
 import shutil
 import sys
 from dataclasses import asdict
-from datetime import timedelta
+from datetime import datetime, timedelta
 from importlib import import_module
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -164,7 +164,8 @@ class PerceptionManager:
             "running": self._running,
             "collectors_count": len(self.collector_manager.collectors),
             "collector_states": {
-                name: asdict(state) for name, state in self.collector_manager.states.items()
+                name: self._to_json_safe(asdict(state))
+                for name, state in self.collector_manager.states.items()
             },
             "stream_buffer_size": len(self.stream.buffer),
             "trend_count": len(self.trend_engine.trends),
@@ -225,3 +226,15 @@ class PerceptionManager:
             return True
         current = set(self.get_current_system_info()["capabilities"])
         return required.issubset(current)
+
+    def _to_json_safe(self, value: Any) -> Any:
+        """将常见 Python 对象转换为可 JSON 序列化结构。"""
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {key: self._to_json_safe(val) for key, val in value.items()}
+        if isinstance(value, list):
+            return [self._to_json_safe(item) for item in value]
+        if isinstance(value, tuple):
+            return [self._to_json_safe(item) for item in value]
+        return value
