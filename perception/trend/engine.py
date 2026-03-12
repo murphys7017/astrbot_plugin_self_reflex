@@ -3,7 +3,7 @@
 import asyncio
 from collections import deque
 from datetime import datetime, timedelta
-from typing import Deque, List, Optional, Set
+from typing import Deque, Dict, List, Optional, Set
 
 from astrbot.api import logger
 from ..events import EventManager
@@ -36,6 +36,7 @@ class TrendEngine:
         fallback_window: timedelta = timedelta(seconds=30),
         fallback_interval: timedelta = timedelta(seconds=30),
         max_trends: int = 500,
+        trend_event_cooldown: timedelta = timedelta(seconds=300),
     ) -> None:
         self.stream = stream
         self.event_manager = event_manager
@@ -48,10 +49,13 @@ class TrendEngine:
             interval=fallback_interval,
             name="FallbackMetricTrendStrategy",
         )
+        self.trend_event_cooldown = max(timedelta(seconds=0), trend_event_cooldown)
+        self._trend_event_last_emit: Dict[str, float] = {}
         self._running = False
         logger.info(
             f"TrendEngine initialized: fallback_window={fallback_window.total_seconds()}s "
-            f"fallback_interval={fallback_interval.total_seconds()}s max_trends={self.trends.maxlen}"
+            f"fallback_interval={fallback_interval.total_seconds()}s max_trends={self.trends.maxlen} "
+            f"trend_event_cooldown={self.trend_event_cooldown.total_seconds()}s"
         )
 
     def register_strategy(self, strategy: BaseTrendStrategy) -> None:
@@ -186,6 +190,8 @@ class TrendEngine:
         level = self._trend_event_level(trend)
         if level is None:
             return
+        if not self._should_emit_trend_event(trend):
+            return
 
         await self._emit_event(
             event_type="TrendDetectedEvent",
@@ -208,11 +214,27 @@ class TrendEngine:
 
     def _trend_event_level(self, trend: Trend) -> Optional[EventLevel]:
         """为趋势结果映射事件级别；返回 None 表示不发事件。"""
-        if trend.direction in {TrendDirection.RAPID_RISE, TrendDirection.RAPID_DROP}:
-            return EventLevel.WARNING
         if trend.direction == TrendDirection.LONG_SATURATION:
             return EventLevel.CRITICAL
         return None
+
+    def _should_emit_trend_event(self, trend: Trend) -> bool:
+        """按趋势事件冷却窗口进行去重，防止高频重复提醒。"""
+        cooldown_seconds = self.trend_event_cooldown.total_seconds()
+        if cooldown_seconds <= 0:
+            return True
+
+        event_key = f"{trend.metric}|{trend.series_key}|{trend.direction.value}"
+        now_ts = datetime.now().timestamp()
+        last_ts = self._trend_event_last_emit.get(event_key)
+        if last_ts is not None and (now_ts - last_ts) < cooldown_seconds:
+            logger.debug(
+                f"Trend event suppressed by cooldown: key={event_key} "
+                f"elapsed={now_ts - last_ts:.2f}s cooldown={cooldown_seconds:.2f}s"
+            )
+            return False
+        self._trend_event_last_emit[event_key] = now_ts
+        return True
 
     async def run(self, interval: timedelta) -> None:
         """持续运行 TrendEngine，每 interval 执行一次 analyze()。"""

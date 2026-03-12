@@ -118,10 +118,7 @@ def test_trend_engine_uses_fallback_and_respects_explicit_coverage():
 
     assert len([trend for trend in trends if trend.metric == "memory.percent"]) == 1
     assert len([trend for trend in trends if trend.metric == "cpu.percent"]) == 1
-    event = event_manager.queue().get_nowait()
-    assert event.type == "TrendDetectedEvent"
-    assert event.level == EventLevel.WARNING
-    assert event.context["metric"] in {"memory.percent", "cpu.percent"}
+    assert event_manager.queue().qsize() == 0
     assert engine.fallback_strategy.window.total_seconds() == 30
     assert engine.fallback_strategy.interval.total_seconds() == 30
 
@@ -155,7 +152,7 @@ def test_trend_engine_emits_strategy_error_and_keeps_fallback_running():
     assert all(trend.metric != "memory.percent" for trend in trends)
     events = [event_manager.queue().get_nowait() for _ in range(event_manager.queue().qsize())]
     assert any(event.type == "TrendStrategyErrorEvent" and event.context["strategy_name"] == "BrokenStrategy" for event in events)
-    assert any(event.type == "TrendDetectedEvent" and event.context["metric"] == "cpu.percent" for event in events)
+    assert all(event.type != "TrendDetectedEvent" for event in events)
 
 
 def test_percent_metrics_do_not_always_become_long_saturation():
@@ -194,3 +191,50 @@ def test_percent_metrics_can_still_become_long_saturation():
 
     assert len(trends) == 1
     assert trends[0].direction == TrendDirection.LONG_SATURATION
+
+
+def test_percent_metric_detection_works_in_fallback_mode():
+    strategy = FallbackMetricTrendStrategy(
+        metric=None,
+        window=timedelta(seconds=30),
+        interval=timedelta(seconds=30),
+    )
+    now = datetime.now()
+    trends = strategy.compute_trends(
+        [
+            _obs("cpu.percent", 95.0, SourceType.CPU, now - timedelta(seconds=20)),
+            _obs("cpu.percent", 96.0, SourceType.CPU, now - timedelta(seconds=10)),
+            _obs("cpu.percent", 97.0, SourceType.CPU, now),
+        ]
+    )
+
+    assert len(trends) == 1
+    assert trends[0].direction == TrendDirection.LONG_SATURATION
+
+
+def test_trend_engine_emits_extreme_saturation_once_with_cooldown():
+    stream = ObservationStream(time_window=timedelta(seconds=60))
+    event_manager = EventManager()
+    engine = TrendEngine(
+        stream=stream,
+        event_manager=event_manager,
+        fallback_window=timedelta(seconds=30),
+        fallback_interval=timedelta(seconds=0),
+        trend_event_cooldown=timedelta(seconds=300),
+    )
+
+    now = datetime.now()
+    stream.push_many(
+        [
+            _obs("memory.percent", 95.0, SourceType.MEMORY, now - timedelta(seconds=20)),
+            _obs("memory.percent", 96.0, SourceType.MEMORY, now - timedelta(seconds=10)),
+            _obs("memory.percent", 97.0, SourceType.MEMORY, now),
+        ]
+    )
+    asyncio.run(engine.analyze())
+    asyncio.run(engine.analyze())
+
+    events = [event_manager.queue().get_nowait() for _ in range(event_manager.queue().qsize())]
+    trend_events = [event for event in events if event.type == "TrendDetectedEvent"]
+    assert len(trend_events) == 1
+    assert trend_events[0].level == EventLevel.CRITICAL

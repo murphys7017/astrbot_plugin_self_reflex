@@ -38,6 +38,12 @@
     "type": "float",
     "default": 30.0
   },
+  "trend_event_cooldown_seconds": {
+    "description": "同一趋势事件最小重复提醒间隔（秒）",
+    "type": "float",
+    "default": 300.0,
+    "hint": "用于抑制高频重复提醒，默认 5 分钟"
+  },
   "collector_default_interval_seconds": {
     "description": "Collector 默认采集间隔（秒）",
     "type": "int",

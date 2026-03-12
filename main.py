@@ -148,6 +148,8 @@ class MyPlugin(Star):
         self._notify_unified_msg_origin = str(self.config.get("notify_unified_msg_origin", "")).strip()
         self._runtime_notify_unified_msg_origin = ""
         self._default_provider_id = str(self.config.get("default_provider_id", "")).strip()
+        self._last_agent_event: Optional[AstrMessageEvent] = None
+        self._notify_agent_event: Optional[AstrMessageEvent] = None
 
         self._recent_signals: Deque[Dict[str, Any]] = deque(
             maxlen=max(1, int(self.config.get("recent_signals_cache", 50)))
@@ -202,6 +204,7 @@ class MyPlugin(Star):
         未识别 action 时默认返回 status。
         """
         action_norm = str(action or "status").strip().lower()
+        self._remember_agent_event(event)
         logger.debug(f"Command called: perception action={action_norm} by={event.get_sender_name()}")
 
         if action_norm == "bind":
@@ -232,6 +235,7 @@ class MyPlugin(Star):
     @filter.command("perception_status")
     async def perception_status(self, event: AstrMessageEvent):
         """兼容旧命令：查看当前 Perception 系统状态。"""
+        self._remember_agent_event(event)
         logger.debug(f"Command called: perception_status by={event.get_sender_name()}")
         yield event.plain_result(self._build_status_text(event))
 
@@ -277,6 +281,15 @@ class MyPlugin(Star):
         fallback_text = self._build_signal_fallback_text(signal)
         prompt = self._build_signal_prompt(signal)
         try:
+            llm_resp = await self._call_agent(prompt)
+            text = self._extract_completion_text(llm_resp).strip()
+            if text:
+                return text
+            logger.debug("Signal agent text empty, fallback to llm_generate")
+        except Exception as exc:
+            logger.warning(f"signal agent call failed, fallback to llm_generate: {exc}")
+
+        try:
             llm_resp = await self._call_llm(prompt)
             text = self._extract_completion_text(llm_resp).strip()
         except Exception as exc:
@@ -290,7 +303,6 @@ class MyPlugin(Star):
 
     def _build_signal_prompt(self, signal: ReflexSignal) -> str:
         """构建对用户通知的自然语言提示。"""
-        persona_name, persona_prompt = self._get_notification_persona()
         message = signal.message or signal.summary
         status = self.perception_manager.get_system_status()
         event_lines = [
@@ -299,22 +311,16 @@ class MyPlugin(Star):
         ]
         if not event_lines:
             event_lines = ["1. [info] No detailed events attached."]
-
-        persona_section = (
-            f"Persona Name: {persona_name or 'default'}\n"
-            f"Persona Prompt:\n{persona_prompt or 'No persona prompt available.'}\n\n"
-        )
         return (
             "You are writing a proactive self-status notification to the user.\n"
             "Speak in first person as the bot, with a natural and human-like tone.\n"
             "Treat the system as your body: collectors are senses, the event queue is nerves, the trend layer is intuition, and failures feel like pain, numbness, pressure, breath disruption, or fatigue.\n"
             "Write as if you are noticing that some part of your body is not quite right, instead of issuing a cold system bulletin.\n"
+            "Use the current session's existing persona and memory automatically; do not expose internal persona details.\n"
             "Do not output JSON or Markdown.\n"
             "Do not mention prompts, personas, system instructions, or internal pipelines.\n"
             "Do not invent facts beyond the provided state.\n"
             "Keep the message short, concrete, emotionally consistent, and embodied.\n\n"
-            "Adopt the following persona as writing style guidance:\n\n"
-            f"{persona_section}"
             "Current body state:\n\n"
             f"Level: {signal.level}\n"
             f"Message: {message}\n"
@@ -330,7 +336,7 @@ class MyPlugin(Star):
             f"{chr(10).join(event_lines)}\n\n"
             "Write a short Chinese message to the user that:\n"
             "1. sounds like the bot is sensing its own body state, like a body self-check;\n"
-            "2. reflects the persona style above;\n"
+            "2. reflects the current session persona naturally;\n"
             "3. clearly mentions what feels abnormal or noteworthy;\n"
             "4. briefly explains the likely cause when it is supported by the events;\n"
             "5. uses gentle body metaphors such as breathing, pulse, pain, numbness, fatigue, blockage, dizziness, or pressure when appropriate;\n"
@@ -345,52 +351,65 @@ class MyPlugin(Star):
             return f"我刚刚感觉到身体里有一处不太对劲：{message}。从现在的感知来看，可能和 {reason} 有关。"
         return f"我刚刚感觉到身体里有一处不太对劲：{message}。"
 
-    def _get_notification_persona(self) -> tuple[str, str]:
-        """获取通知目标会话的人格设定；失败时回退为空。"""
-        persona_manager = getattr(self.context, "persona_manager", None)
-        if persona_manager is None or not hasattr(persona_manager, "get_default_persona_v3"):
-            return "", ""
-
-        umo = self._get_notify_target() or None
-        try:
-            personality = persona_manager.get_default_persona_v3(umo=umo)
-        except TypeError:
-            personality = persona_manager.get_default_persona_v3(umo)
-        except Exception as exc:
-            logger.warning(f"Failed to read persona config: {exc}")
-            return "", ""
-
-        if not personality:
-            return "", ""
-
-        if isinstance(personality, dict):
-            name = str(personality.get("name", "") or "").strip()
-            prompt = str(personality.get("prompt", "") or personality.get("system_prompt", "") or "").strip()
-            return name, prompt
-
-        name = str(getattr(personality, "name", "") or getattr(personality, "persona_id", "") or "").strip()
-        prompt = str(
-            getattr(personality, "prompt", "")
-            or getattr(personality, "system_prompt", "")
-            or ""
-        ).strip()
-        return name, prompt
-
     async def _llm_generate_for_reflex(self, prompt: str) -> str:
         """提供给 Perception ReflexEngine 的 LLM 生成函数。"""
         logger.debug(f"Reflex llm_generate called with prompt length={len(prompt)}")
         resp = await self._call_llm(prompt)
         return self._extract_completion_text(resp)
 
+    async def _call_agent(self, prompt: str) -> Any:
+        """调用 AstrBot Agent 接口（tool_loop_agent）。"""
+        event = self._get_agent_event_for_notify()
+        if event is None:
+            raise RuntimeError(
+                "No suitable event is cached for tool_loop_agent. "
+                "Run /perception status in the notification target session first."
+            )
+        provider_id = self._default_provider_id
+        if not provider_id:
+            provider_id = await self.context.get_current_chat_provider_id(umo=event.unified_msg_origin)
+        logger.debug(
+            f"Calling tool_loop_agent for prompt length={len(prompt)} "
+            f"umo={event.unified_msg_origin} provider_id={provider_id}"
+        )
+        return await self.context.tool_loop_agent(
+            event=event,
+            chat_provider_id=provider_id,
+            prompt=prompt,
+            contexts=[],
+            max_steps=6,
+            tool_call_timeout=30,
+        )
+
     async def _call_llm(self, prompt: str) -> Any:
         """调用 AstrBot LLM 接口。"""
         logger.debug(f"Calling LLM for prompt length={len(prompt)}")
-        if self._default_provider_id:
-            return await self.context.llm_generate(
-                chat_provider_id=self._default_provider_id,
-                prompt=prompt,
+        provider_id = self._default_provider_id or self._resolve_chat_provider_id()
+        if not provider_id:
+            raise RuntimeError(
+                "No chat provider is available. Please configure `default_provider_id` "
+                "or set a current chat provider in AstrBot."
             )
-        return await self.context.llm_generate(prompt=prompt)
+        return await self.context.llm_generate(
+            chat_provider_id=provider_id,
+            prompt=prompt,
+            contexts=[],
+        )
+
+    def _resolve_chat_provider_id(self) -> str:
+        """解析当前可用对话 Provider ID。"""
+        try:
+            provider = self.context.get_using_provider(umo=self._get_notify_target() or None)
+        except Exception as exc:
+            logger.warning(f"Failed to resolve current chat provider: {exc}")
+            return ""
+        if provider is None:
+            return ""
+        try:
+            return str(provider.meta().id or "").strip()
+        except Exception as exc:
+            logger.warning(f"Failed to read provider id from current provider: {exc}")
+            return ""
 
     def _extract_completion_text(self, response: Any) -> str:
         """从 LLM 返回对象中提取文本。"""
@@ -470,6 +489,7 @@ class MyPlugin(Star):
             "collector_tick_interval": self.config.get("collector_tick_interval"),
             "trend_interval_seconds": self.config.get("trend_interval_seconds"),
             "fallback_trend_window_seconds": self.config.get("fallback_trend_window_seconds"),
+            "trend_event_cooldown_seconds": self.config.get("trend_event_cooldown_seconds"),
             "collector_default_interval_seconds": self.config.get("collector_default_interval_seconds"),
             "collector_rate_limit": self.config.get("collector_rate_limit"),
             "collector_no_data_threshold": self.config.get("collector_no_data_threshold"),
@@ -499,6 +519,7 @@ class MyPlugin(Star):
             logger.warning("Bind notify origin failed: event.unified_msg_origin is empty")
             return "绑定失败：当前会话不支持 unified_msg_origin。"
 
+        self._remember_agent_event(event)
         self._runtime_notify_unified_msg_origin = origin
         self._notify_unified_msg_origin = origin
         self.config["notify_unified_msg_origin"] = origin
@@ -510,10 +531,35 @@ class MyPlugin(Star):
         """解除主动通知绑定。"""
         self._runtime_notify_unified_msg_origin = ""
         self._notify_unified_msg_origin = ""
+        self._notify_agent_event = None
         self.config["notify_unified_msg_origin"] = ""
         self._save_config()
         logger.info("Notify origin unbound")
         return "通知绑定已解除"
+
+    def _remember_agent_event(self, event: AstrMessageEvent) -> None:
+        """缓存可用于 Agent 调用的事件上下文。"""
+        self._last_agent_event = event
+        target = self._get_notify_target()
+        origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        if target and origin and origin == target:
+            self._notify_agent_event = event
+
+    def _get_agent_event_for_notify(self) -> Optional[AstrMessageEvent]:
+        """优先返回通知目标会话的事件，其次回退最近事件。"""
+        target = self._get_notify_target()
+        if target and self._notify_agent_event is not None:
+            notify_origin = str(getattr(self._notify_agent_event, "unified_msg_origin", "") or "").strip()
+            if notify_origin == target:
+                return self._notify_agent_event
+        if self._last_agent_event is None:
+            return None
+        if not target:
+            return self._last_agent_event
+        last_origin = str(getattr(self._last_agent_event, "unified_msg_origin", "") or "").strip()
+        if last_origin == target:
+            return self._last_agent_event
+        return None
 
     def _save_config(self) -> None:
         """保存插件配置（若当前 AstrBot 版本支持）。"""

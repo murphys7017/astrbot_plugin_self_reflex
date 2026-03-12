@@ -25,6 +25,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "collector_tick_interval": 0.5,
     "trend_interval_seconds": 30.0,
     "fallback_trend_window_seconds": 30.0,
+    "trend_event_cooldown_seconds": 300.0,
     "collector_default_interval_seconds": 5,
     "collector_rate_limit": 200,
     "collector_no_data_threshold": 50,
@@ -71,6 +72,7 @@ class PerceptionManager:
             event_manager=self.event_manager,
             fallback_window=timedelta(seconds=float(cfg["fallback_trend_window_seconds"])),
             fallback_interval=timedelta(seconds=float(cfg["trend_interval_seconds"])),
+            trend_event_cooldown=timedelta(seconds=float(cfg["trend_event_cooldown_seconds"])),
         )
         self.reflex_engine = ReflexEngine(
             event_manager=self.event_manager,
@@ -89,7 +91,8 @@ class PerceptionManager:
             f"PerceptionManager initialized: stream_window={int(float(cfg['stream_window_seconds']))}s "
             f"collector_tick={self._collector_tick_interval} "
             f"trend_interval={self._trend_interval.total_seconds()}s "
-            f"fallback_trend_window={float(cfg['fallback_trend_window_seconds'])}s"
+            f"fallback_trend_window={float(cfg['fallback_trend_window_seconds'])}s "
+            f"trend_event_cooldown={float(cfg['trend_event_cooldown_seconds'])}s"
         )
 
     async def start(self) -> None:

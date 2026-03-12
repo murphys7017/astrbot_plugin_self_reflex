@@ -22,7 +22,7 @@ class FallbackMetricTrendStrategy(BaseTrendStrategy):
     """
 
     SERIES_IDENTITY_KEYS = ("pid", "name", "rank", "status")
-    PERCENT_SUFFIX = ".percent"
+    PERCENT_SUFFIXES = (".percent", "_percent")
 
     def __init__(
         self,
@@ -70,7 +70,7 @@ class FallbackMetricTrendStrategy(BaseTrendStrategy):
             duration_seconds = (end_obs.timestamp - start_obs.timestamp).total_seconds()
             slope = 0.0 if duration_seconds <= 0 else (end_value - start_value) / duration_seconds
             delta = end_value - start_value
-            direction = self._infer_direction(values=numeric_values, delta=delta, slope=slope)
+            direction = self._infer_direction(metric=metric, values=numeric_values, delta=delta, slope=slope)
             trends.append(
                 Trend(
                     metric=metric,
@@ -128,54 +128,54 @@ class FallbackMetricTrendStrategy(BaseTrendStrategy):
         encoded_tags = json.dumps(series_tags, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return f"{metric}:{encoded_tags}"
 
-    def _infer_direction(self, values: List[float], delta: float, slope: float) -> TrendDirection:
+    def _infer_direction(self, metric: str, values: List[float], delta: float, slope: float) -> TrendDirection:
         """根据值序列和变化速率判断趋势方向。"""
         if not values:
             return TrendDirection.STABLE
 
-        if self._is_percent_metric() and self._is_long_saturation(values):
+        if self._is_percent_metric(metric) and self._is_long_saturation(metric=metric, values=values):
             return TrendDirection.LONG_SATURATION
 
-        if self._is_stable(values=values, delta=delta, slope=slope):
+        if self._is_stable(metric=metric, values=values, delta=delta, slope=slope):
             return TrendDirection.STABLE
 
-        if self._is_rapid_change(values=values, delta=delta):
+        if self._is_rapid_change(metric=metric, values=values, delta=delta):
             return TrendDirection.RAPID_RISE if delta > 0 else TrendDirection.RAPID_DROP
 
         return TrendDirection.UP if slope > 0 else TrendDirection.DOWN
 
-    def _is_percent_metric(self) -> bool:
-        """判断当前策略是否处理百分比型指标。"""
-        return bool(self.metric and self.metric.endswith(self.PERCENT_SUFFIX))
+    def _is_percent_metric(self, metric: str) -> bool:
+        """判断指标是否属于百分比口径。"""
+        return metric.endswith(self.PERCENT_SUFFIXES)
 
-    def _is_stable(self, values: List[float], delta: float, slope: float) -> bool:
+    def _is_stable(self, metric: str, values: List[float], delta: float, slope: float) -> bool:
         """根据指标口径判断是否稳定。"""
         start_value = values[0]
         baseline = max(abs(start_value), 1.0)
 
-        if self._is_percent_metric():
+        if self._is_percent_metric(metric):
             return abs(delta) <= 1.0 and abs(slope) <= 0.1
 
         relative_delta = abs(delta) / baseline
         return relative_delta <= 0.02 and abs(slope) <= self.stable_epsilon
 
-    def _is_rapid_change(self, values: List[float], delta: float) -> bool:
+    def _is_rapid_change(self, metric: str, values: List[float], delta: float) -> bool:
         """根据指标口径判断是否快速变化。"""
         start_value = values[0]
         baseline = max(abs(start_value), 1.0)
 
-        if self._is_percent_metric():
+        if self._is_percent_metric(metric):
             return abs(delta) >= 10.0
 
         relative_delta = abs(delta) / baseline
         return relative_delta >= self.rapid_delta_threshold
 
-    def _is_long_saturation(self, values: List[float]) -> bool:
+    def _is_long_saturation(self, metric: str, values: List[float]) -> bool:
         """判断是否出现长时间高位占满。"""
         if len(values) < 3:
             return False
 
-        threshold = 90.0 if self._is_percent_metric() else self.saturation_threshold
+        threshold = 90.0 if self._is_percent_metric(metric) else self.saturation_threshold
         high_count = sum(1 for value in values if value >= threshold)
         return (high_count / len(values)) >= self.saturation_ratio
 
