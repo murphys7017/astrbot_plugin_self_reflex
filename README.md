@@ -9,11 +9,14 @@
 
 Self Reflex 持续采集运行时观测数据（Observation），做趋势分析（Trend），统一事件流（Event），再通过 LLM 判断是否需要对用户发出自然语言提醒。
 
+当前已实现的首个 Collector 为基于 `psutil` 的宿主机总览采集器，可输出 CPU、内存、交换分区、磁盘、网络和 Top 进程快照。
+当前还内置了一个兜底 Fallback Trend，会对数值型 Observation 自动做趋势分析，后续专用 Trend 可以覆盖默认行为。
+
 ## 3. Why Self Reflex
 在 AI Agent 场景中，系统健康状态会直接影响模型行为质量。  
 Self Reflex 解决的是“AI 如何感知自己正在发生什么”：
 
-- 感知系统状态、日志、文件变化、异常行为
+- 感知系统状态，并为日志、文件变化、异常行为等后续 Collector 预留扩展位
 - 在本地进行轻量趋势分析
 - 只将有价值的信号交给上层 LLM 或用户
 - 为后续自动修复（Self-Healing）打基础
@@ -131,6 +134,9 @@ git clone https://github.com/murphys7017/astrbot_plugin_self_reflex.git
 - `perception_enabled`
 - `default_provider_id`（`select_provider`）
 - `notify_unified_msg_origin`
+- `psutil_top_processes`
+- `trend_interval_seconds`
+- `fallback_trend_window_seconds`
 - `reflex_batch_size`
 - `reflex_batch_timeout`
 - `reflex_rate_limit`

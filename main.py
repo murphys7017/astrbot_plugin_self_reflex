@@ -14,6 +14,7 @@ from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
 
+from .perception.collectors import PsutilSystemCollector
 from .perception.perception_manager import PerceptionManager
 from .perception.reflex import ReflexSignal
 
@@ -136,7 +137,7 @@ class GetRecentEventsTool(FunctionTool[AstrAgentContext]):
         return json.dumps(self.getter(limit), ensure_ascii=False, default=str)
 
 
-@register("astrbot_plugin_self_reflex", "YakumoAki", "Self Reflex perception runtime bridge", "0.1.0")
+@register("astrbot_plugin_self_reflex", "YakumoAki", "Self Reflex perception runtime bridge", "0.1.1")
 class MyPlugin(Star):
     """AstrBot 插件入口：负责将 Perception 系统接入 AstrBot。"""
 
@@ -159,6 +160,7 @@ class MyPlugin(Star):
             llm_generate=self._llm_generate_for_reflex,
             config=self._build_perception_config(),
         )
+        self._register_default_collectors()
         self._signal_task: Optional[asyncio.Task[Any]] = None
         self._register_tools()
         logger.info(
@@ -255,17 +257,11 @@ class MyPlugin(Star):
         self._append_signal_cache(signal)
         self._append_event_cache(signal)
 
-        prompt = self._build_signal_prompt(signal)
-        try:
-            llm_resp = await self._call_llm(prompt)
-            text = self._extract_completion_text(llm_resp).strip()
-        except Exception as exc:
-            logger.error(f"signal llm call failed: {exc}")
+        if not self._get_notify_target():
+            logger.debug("Signal notification skipped: no notify target bound")
             return
 
-        if not text:
-            logger.debug("Signal notification skipped: empty llm text")
-            return
+        text = await self._build_notification_text(signal)
 
         try:
             sent = await self._send_notification(text)
@@ -276,21 +272,105 @@ class MyPlugin(Star):
         except Exception as exc:
             logger.error(f"signal notify failed: {exc}")
 
+    async def _build_notification_text(self, signal: ReflexSignal) -> str:
+        """构建最终通知文本；当二次 LLM 失败时退回保底文案。"""
+        fallback_text = self._build_signal_fallback_text(signal)
+        prompt = self._build_signal_prompt(signal)
+        try:
+            llm_resp = await self._call_llm(prompt)
+            text = self._extract_completion_text(llm_resp).strip()
+        except Exception as exc:
+            logger.warning(f"signal llm call failed, using fallback text: {exc}")
+            return fallback_text
+
+        if not text:
+            logger.debug("Signal llm text empty, using fallback text")
+            return fallback_text
+        return text
+
     def _build_signal_prompt(self, signal: ReflexSignal) -> str:
         """构建对用户通知的自然语言提示。"""
+        persona_name, persona_prompt = self._get_notification_persona()
         message = signal.message or signal.summary
+        status = self.perception_manager.get_system_status()
+        event_lines = [
+            f"{idx}. [{event.level.value}] {event.type}: {event.message}"
+            for idx, event in enumerate(signal.events, start=1)
+        ]
+        if not event_lines:
+            event_lines = ["1. [info] No detailed events attached."]
+
+        persona_section = (
+            f"Persona Name: {persona_name or 'default'}\n"
+            f"Persona Prompt:\n{persona_prompt or 'No persona prompt available.'}\n\n"
+        )
         return (
-            "You are an AI assistant that can sense its own system status.\n\n"
-            "Recently you detected the following internal signals:\n\n"
+            "You are writing a proactive self-status notification to the user.\n"
+            "Speak in first person as the bot, with a natural and human-like tone.\n"
+            "Do not output JSON or Markdown.\n"
+            "Do not mention prompts, personas, system instructions, or internal pipelines.\n"
+            "Do not invent facts beyond the provided state.\n"
+            "Keep the message short, concrete, and emotionally consistent.\n\n"
+            "Adopt the following persona as writing style guidance:\n\n"
+            f"{persona_section}"
+            "Current body state:\n\n"
             f"Level: {signal.level}\n"
             f"Message: {message}\n"
             f"Summary: {signal.summary}\n"
             f"Reason: {signal.reason}\n"
-            f"Events Count: {len(signal.events)}\n\n"
-            "Describe the issue naturally as if you feel something is wrong.\n"
-            "Explain what might be happening.\n"
-            "Respond in a short message to the user."
+            f"Events Count: {len(signal.events)}\n"
+            f"System Running: {status['running']}\n"
+            f"Collectors Count: {status['collectors_count']}\n"
+            f"Stream Buffer Size: {status['stream_buffer_size']}\n"
+            f"Event Queue Size: {status['event_queue_size']}\n"
+            f"Signal Queue Size: {status['signal_queue_size']}\n\n"
+            "Observed events:\n"
+            f"{chr(10).join(event_lines)}\n\n"
+            "Write a short Chinese message to the user that:\n"
+            "1. sounds like the bot is sensing its own body state;\n"
+            "2. reflects the persona style above;\n"
+            "3. clearly mentions what feels abnormal or noteworthy;\n"
+            "4. briefly explains the likely cause when it is supported by the events.\n"
         )
+
+    def _build_signal_fallback_text(self, signal: ReflexSignal) -> str:
+        """当通知 LLM 不可用时，构建一个可直接发送的保底文案。"""
+        message = (signal.message or signal.summary or "我感知到自己的运行状态出现了异常。").strip()
+        reason = str(signal.reason or "").strip()
+        if reason:
+            return f"我刚刚感觉到自己的状态有些不对：{message}。可能原因是：{reason}。"
+        return f"我刚刚感觉到自己的状态有些不对：{message}。"
+
+    def _get_notification_persona(self) -> tuple[str, str]:
+        """获取通知目标会话的人格设定；失败时回退为空。"""
+        persona_manager = getattr(self.context, "persona_manager", None)
+        if persona_manager is None or not hasattr(persona_manager, "get_default_persona_v3"):
+            return "", ""
+
+        umo = self._get_notify_target() or None
+        try:
+            personality = persona_manager.get_default_persona_v3(umo=umo)
+        except TypeError:
+            personality = persona_manager.get_default_persona_v3(umo)
+        except Exception as exc:
+            logger.warning(f"Failed to read persona config: {exc}")
+            return "", ""
+
+        if not personality:
+            return "", ""
+
+        if isinstance(personality, dict):
+            name = str(personality.get("name", "") or "").strip()
+            prompt = str(personality.get("prompt", "") or personality.get("system_prompt", "") or "").strip()
+            return name, prompt
+
+        name = str(getattr(personality, "name", "") or getattr(personality, "persona_id", "") or "").strip()
+        prompt = str(
+            getattr(personality, "prompt", "")
+            or getattr(personality, "system_prompt", "")
+            or ""
+        ).strip()
+        return name, prompt
 
     async def _llm_generate_for_reflex(self, prompt: str) -> str:
         """提供给 Perception ReflexEngine 的 LLM 生成函数。"""
@@ -385,11 +465,13 @@ class MyPlugin(Star):
             "stream_window_seconds": self.config.get("stream_window_seconds"),
             "collector_tick_interval": self.config.get("collector_tick_interval"),
             "trend_interval_seconds": self.config.get("trend_interval_seconds"),
+            "fallback_trend_window_seconds": self.config.get("fallback_trend_window_seconds"),
             "collector_default_interval_seconds": self.config.get("collector_default_interval_seconds"),
             "collector_rate_limit": self.config.get("collector_rate_limit"),
             "collector_no_data_threshold": self.config.get("collector_no_data_threshold"),
             "collector_timeout_seconds": self.config.get("collector_timeout_seconds"),
             "collector_offline_factor": self.config.get("collector_offline_factor"),
+            "psutil_top_processes": self.config.get("psutil_top_processes"),
             "event_queue_size": self.config.get("event_queue_size"),
             "reflex_batch_size": self.config.get("reflex_batch_size"),
             "reflex_batch_timeout": self.config.get("reflex_batch_timeout"),
@@ -398,6 +480,18 @@ class MyPlugin(Star):
         config = {k: v for k, v in mapping.items() if v is not None}
         logger.debug(f"Perception config mapped: keys={sorted(config.keys())}")
         return config
+
+    def _register_default_collectors(self) -> None:
+        """注册首批默认 Collector。"""
+        interval = max(1, int(self.config.get("collector_default_interval_seconds", 5)))
+        top_processes = max(1, int(self.config.get("psutil_top_processes", 5)))
+        collector = PsutilSystemCollector(interval=interval, top_processes=top_processes)
+        loaded = self.perception_manager.register_collector(collector)
+        if loaded:
+            logger.info(
+                f"Default collector registered: {collector.name} "
+                f"interval={interval}s top_processes={top_processes}"
+            )
 
     def _bind_notify_origin(self, event: AstrMessageEvent) -> str:
         """将当前会话统一 ID 绑定为主动通知目标。"""

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, Dict
 
 from .enums import TrendDirection
 
@@ -16,3 +17,5 @@ class Trend:
     direction: TrendDirection  # 趋势方向/形态
     slope: float  # 趋势斜率
     samples: int  # 样本数量
+    series_key: str  # 趋势序列唯一标识
+    series_tags: Dict[str, Any]  # 趋势序列身份标签

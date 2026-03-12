@@ -12,35 +12,47 @@ class BaseTrendStrategy(ABC):
     趋势策略抽象基类。
 
     所有策略必须声明：
-    - metric: 策略处理的指标名称
     - window: 策略分析所需的时间窗口
     - interval: 策略执行间隔
+    - covers(metric): 当前策略是否接管某个 metric
     """
 
-    metric: str
+    metric: Optional[str]
     window: timedelta
     interval: timedelta
+    name: str
     _last_run: Optional[float]
 
-    def __init__(self, metric: str, window: timedelta, interval: Optional[timedelta] = None) -> None:
+    def __init__(
+        self,
+        metric: Optional[str],
+        window: timedelta,
+        interval: Optional[timedelta] = None,
+        name: Optional[str] = None,
+    ) -> None:
         # interval 默认复用 window，保证“窗口采样”与“调度频率”一致。
         self.metric = metric
         self.window = window
         self.interval = interval if interval is not None else window
+        self.name = name or self.__class__.__name__
         self._last_run = None
 
     @abstractmethod
-    def compute_trend(self, observations: List[Observation]) -> Optional[Trend]:
+    def compute_trends(self, observations: List[Observation]) -> List[Trend]:
         """
-        根据 Observation 列表计算趋势。
+        根据 Observation 列表计算趋势结果。
 
         Args:
             observations: 输入观测数据。
 
         Returns:
-            Trend 对象；若输入为空或无法计算可返回 None。
+            Trend 列表；若输入为空或无法计算可返回空列表。
         """
         raise NotImplementedError
+
+    def covers(self, metric: str) -> bool:
+        """判断当前策略是否接管某个 metric。"""
+        return self.metric is None or self.metric == metric
 
     def should_run(self, now: float) -> bool:
         """

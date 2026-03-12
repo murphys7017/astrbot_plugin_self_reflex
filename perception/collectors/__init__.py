@@ -1,5 +1,6 @@
-"""Collector 抽象接口导出。"""
+"""Collector 模块导出。"""
 
 from .base import BaseCollector
+from .psutil_system import PsutilSystemCollector
 
-__all__ = ["BaseCollector"]
+__all__ = ["BaseCollector", "PsutilSystemCollector"]

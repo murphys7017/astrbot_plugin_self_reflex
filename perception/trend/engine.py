@@ -1,13 +1,15 @@
 """TrendEngine：异步趋势分析调度器。"""
 
 import asyncio
+from collections import deque
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Deque, List, Optional, Set
 
 from astrbot.api import logger
 from ..events import EventManager
 from ..models import Event, EventLevel, Trend
 from ..stream import ObservationStream
+from .collector_strategy import FallbackMetricTrendStrategy
 from .strategy import BaseTrendStrategy
 
 
@@ -25,22 +27,38 @@ class TrendEngine:
     event_manager: EventManager
     event_queue: "asyncio.Queue[Event]"
     strategies: List[BaseTrendStrategy]
-    trends: List[Trend]
+    trends: Deque[Trend]
 
-    def __init__(self, stream: ObservationStream, event_manager: EventManager) -> None:
+    def __init__(
+        self,
+        stream: ObservationStream,
+        event_manager: EventManager,
+        fallback_window: timedelta = timedelta(seconds=30),
+        fallback_interval: timedelta = timedelta(seconds=30),
+        max_trends: int = 500,
+    ) -> None:
         self.stream = stream
         self.event_manager = event_manager
         self.event_queue = self.event_manager.queue()
         self.strategies = []
-        self.trends = []
+        self.trends = deque(maxlen=max(1, int(max_trends)))
+        self.fallback_strategy = FallbackMetricTrendStrategy(
+            metric=None,
+            window=fallback_window,
+            interval=fallback_interval,
+            name="FallbackMetricTrendStrategy",
+        )
         self._running = False
-        logger.info("TrendEngine initialized")
+        logger.info(
+            f"TrendEngine initialized: fallback_window={fallback_window.total_seconds()}s "
+            f"fallback_interval={fallback_interval.total_seconds()}s max_trends={self.trends.maxlen}"
+        )
 
     def register_strategy(self, strategy: BaseTrendStrategy) -> None:
         """注册趋势策略。"""
         self.strategies.append(strategy)
         logger.info(
-            f"Trend strategy registered: metric={strategy.metric} "
+            f"Trend strategy registered: name={strategy.name} metric={strategy.metric or '*'} "
             f"window={strategy.window.total_seconds()}s interval={strategy.interval.total_seconds()}s"
         )
 
@@ -57,56 +75,103 @@ class TrendEngine:
             本轮产出的 Trend 列表。
         """
         analyzed_trends: List[Trend] = []
+        now = datetime.now()
+        now_ts = now.timestamp()
         logger.debug(f"Trend analyze start: strategies={len(self.strategies)}")
+        covered_metrics = await self._analyze_explicit_strategies(now=now, now_ts=now_ts, results=analyzed_trends)
+        await self._analyze_fallback_strategy(
+            now=now,
+            now_ts=now_ts,
+            covered_metrics=covered_metrics,
+            results=analyzed_trends,
+        )
+        logger.debug(f"Trend analyze done: generated={len(analyzed_trends)}")
+        return analyzed_trends
+
+    async def _analyze_explicit_strategies(
+        self,
+        now: datetime,
+        now_ts: float,
+        results: List[Trend],
+    ) -> Set[str]:
+        """分析显式注册的专用趋势策略。"""
+        covered_metrics: Set[str] = set()
         for strategy in self.strategies:
-            strategy_now = datetime.now()
-            now_ts = strategy_now.timestamp()
             if not strategy.should_run(now_ts):
-                logger.debug(f"Trend strategy skipped by interval: metric={strategy.metric}")
+                logger.debug(f"Trend strategy skipped by interval: name={strategy.name}")
                 continue
 
-            start_time = strategy_now - strategy.window
-            observations = self.stream.get_window(
-                start=start_time,
-                end=strategy_now,
-                metric=strategy.metric,
-            )
+            start_time = now - strategy.window
+            observations = self.stream.get_window(start=start_time, end=now)
+            filtered = [obs for obs in observations if strategy.covers(obs.metric)]
+            covered_metrics.update(obs.metric for obs in filtered)
             logger.debug(
-                f"Trend strategy input prepared: metric={strategy.metric} observations={len(observations)}"
+                f"Trend strategy input prepared: name={strategy.name} observations={len(filtered)}"
             )
             try:
-                trend = strategy.compute_trend(observations)
-                if trend is not None:
+                for trend in strategy.compute_trends(filtered):
                     self.submit_trend(trend)
-                    analyzed_trends.append(trend)
-                    logger.debug(f"Trend generated: metric={trend.metric} samples={trend.samples}")
-                else:
-                    await self._emit_event(
-                        event_type="TrendNoDataEvent",
-                        level=EventLevel.INFO,
-                        message=f"metric '{strategy.metric}' 在窗口内无可用数据",
-                        context={
-                            "metric": strategy.metric,
-                            "window_seconds": strategy.window.total_seconds(),
-                            "observation_count": len(observations),
-                        },
+                    results.append(trend)
+                    logger.debug(
+                        f"Trend generated by explicit strategy: metric={trend.metric} "
+                        f"series_key={trend.series_key} samples={trend.samples}"
                     )
             except Exception as exc:
                 await self._emit_event(
                     event_type="TrendStrategyErrorEvent",
                     level=EventLevel.WARNING,
-                    message=f"metric '{strategy.metric}' 趋势策略执行失败: {exc}",
+                    message=f"trend strategy '{strategy.name}' 执行失败: {exc}",
                     context={
                         "metric": strategy.metric,
+                        "strategy_name": strategy.name,
                         "window_seconds": strategy.window.total_seconds(),
                         "error": repr(exc),
                     },
                 )
             finally:
                 strategy._last_run = now_ts
+        return covered_metrics
 
-        logger.debug(f"Trend analyze done: generated={len(analyzed_trends)}")
-        return analyzed_trends
+    async def _analyze_fallback_strategy(
+        self,
+        now: datetime,
+        now_ts: float,
+        covered_metrics: Set[str],
+        results: List[Trend],
+    ) -> None:
+        """分析内置兜底趋势策略。"""
+        if not self.fallback_strategy.should_run(now_ts):
+            logger.debug("Fallback trend strategy skipped by interval")
+            return
+
+        start_time = now - self.fallback_strategy.window
+        observations = self.stream.get_window(start=start_time, end=now)
+        filtered = [obs for obs in observations if obs.metric not in covered_metrics]
+        logger.debug(
+            f"Fallback trend input prepared: observations={len(filtered)} covered_metrics={sorted(covered_metrics)}"
+        )
+        try:
+            for trend in self.fallback_strategy.compute_trends(filtered):
+                self.submit_trend(trend)
+                results.append(trend)
+                logger.debug(
+                    f"Trend generated by fallback strategy: metric={trend.metric} "
+                    f"series_key={trend.series_key} samples={trend.samples}"
+                )
+        except Exception as exc:
+            await self._emit_event(
+                event_type="TrendStrategyErrorEvent",
+                level=EventLevel.WARNING,
+                message=f"trend strategy '{self.fallback_strategy.name}' 执行失败: {exc}",
+                context={
+                    "metric": self.fallback_strategy.metric,
+                    "strategy_name": self.fallback_strategy.name,
+                    "window_seconds": self.fallback_strategy.window.total_seconds(),
+                    "error": repr(exc),
+                },
+            )
+        finally:
+            self.fallback_strategy._last_run = now_ts
 
     def submit_trend(self, trend: Trend) -> None:
         """提交 Trend 到引擎内部结果列表（供上层消费）。"""
