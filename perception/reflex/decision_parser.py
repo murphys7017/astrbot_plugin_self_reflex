@@ -12,12 +12,12 @@ from ..models import Event
 class ReflexSignal:
     """Reflex 输出信号。"""
 
-    push: bool
-    summary: str
-    message: str
-    reason: str
-    level: str
-    events: List[Event]
+    push: bool  # 是否需要上报到用户
+    summary: str  # 信号摘要（用于状态面板/日志）
+    message: str  # 信号短消息（用于通知 prompt）
+    reason: str  # 触发或过滤原因
+    level: str  # 信号级别：info/warning/critical
+    events: List[Event]  # 参与决策的原始事件批次
 
 
 class DecisionParser:
@@ -27,7 +27,14 @@ class DecisionParser:
         """
         解析 LLM 输出 JSON。
 
-        解析失败时返回 push=False。
+        要求模型返回字段：
+        - push
+        - level
+        - message
+        - summary
+        - reason
+
+        解析失败时返回 push=False，并尽量推断 level。
         """
         json_text = self._extract_json(llm_text)
         if json_text is None:

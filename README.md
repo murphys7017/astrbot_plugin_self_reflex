@@ -50,7 +50,7 @@ Signal
 2. ObservationStream 进行时间窗口缓存与索引查询
 3. TrendEngine 按策略分析趋势，产出 `Trend` 或异常事件
 4. EventManager 统一接收事件（包括 Collector 异常、Trend 异常）
-5. Reflex 批量读取事件，调用 LLM 判断是否升级为 `Signal`
+5. Reflex 批量读取事件，调用 LLM 判断是否升级为 `Signal`（`push/level/message/summary/reason`）
 6. 插件主入口消费 Signal，生成自然语言消息并通知用户
 
 ## 6. Core Modules
@@ -105,16 +105,17 @@ git clone https://github.com/murphys7017/astrbot_plugin_self_reflex.git
 然后重启 AstrBot。
 
 ## 9. Commands
-示例命令（面向用户）：
+已实现命令（面向用户）：
 
+- `/perception bind`
+- `/perception unbind`
 - `/perception status`
-- `/perception events`
+- `/perception notify_test`
+- `/perception_status`（兼容旧命令）
 
-当前代码已实现命令：
-
-- `/perception_status`
-
-> 说明：`/perception status` 与 `/perception events` 可作为后续命令别名/扩展目标。
+说明：
+- 在目标会话执行 `/perception bind` 后，插件会保存 `event.unified_msg_origin` 作为主动通知目标。
+- `notify_test` 用于验证 `send_message(unified_msg_origin, chain)` 链路是否正常。
 
 ## 10. Configuration
 插件配置使用 AstrBot 配置系统，配置定义在：
@@ -133,6 +134,12 @@ git clone https://github.com/murphys7017/astrbot_plugin_self_reflex.git
 - `reflex_batch_size`
 - `reflex_batch_timeout`
 - `reflex_rate_limit`
+
+通知相关注意事项：
+
+- `notify_unified_msg_origin` 不是 QQ 号，而是 AstrBot 的统一会话标识串。
+- 推荐通过 `/perception bind` 自动写入该值，而不是手动填写。
+- 未绑定时，插件会记录 warning 日志并跳过主动发送。
 
 ## 11. Project Structure
 结构示例（概念层）：
@@ -155,6 +162,7 @@ astrbot_plugin_self_reflex/
 astrbot_plugin_self_reflex/
 ├── main.py
 ├── _conf_schema.json
+├── requirements.txt
 └── perception/
     ├── collectors/
     ├── events/
@@ -164,6 +172,18 @@ astrbot_plugin_self_reflex/
     ├── stream/
     ├── trend/
     └── perception_manager.py
+```
+
+Reflex Signal 结构（当前实现）：
+
+```json
+{
+  "push": true,
+  "level": "info|warning|critical",
+  "message": "brief signal message",
+  "summary": "short summary",
+  "reason": "why push or not"
+}
 ```
 
 ## 12. Roadmap

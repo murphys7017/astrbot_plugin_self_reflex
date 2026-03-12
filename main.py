@@ -197,6 +197,7 @@ class MyPlugin(Star):
         - /perception unbind
         - /perception status
         - /perception notify_test
+        未识别 action 时默认返回 status。
         """
         action_norm = str(action or "status").strip().lower()
         logger.debug(f"Command called: perception action={action_norm} by={event.get_sender_name()}")
@@ -317,7 +318,13 @@ class MyPlugin(Star):
         return str(response)
 
     async def _send_notification(self, text: str) -> bool:
-        """发送主动通知消息。仅使用 unified_msg_origin。"""
+        """
+        发送主动通知消息，仅使用 unified_msg_origin。
+
+        Returns:
+            True: 已发送
+            False: 未绑定目标，已跳过发送
+        """
         target = self._get_notify_target()
         if target:
             chain = MessageChain().message(text)
@@ -436,6 +443,7 @@ class MyPlugin(Star):
         current_origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
 
         notify_target = self._get_notify_target()
+        # 仅用于展示“当前会话/其他会话/未绑定”，不会在 status 中隐式改写绑定配置。
         if notify_target and current_origin and notify_target == current_origin:
             target_text = "当前会话"
         elif notify_target:

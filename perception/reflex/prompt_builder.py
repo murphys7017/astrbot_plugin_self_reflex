@@ -10,7 +10,7 @@ class PromptBuilder:
     """将事件批次转换为 LLM 输入 Prompt。"""
 
     def build(self, events: List[Event]) -> str:
-        """构建用于事件升级判断的 Prompt。"""
+        """构建用于事件升级判断的 Prompt，要求模型返回结构化 JSON。"""
         # Prompt 保持结构化，便于模型稳定输出 JSON。
         lines = [
             "You are a system perception filter.",
