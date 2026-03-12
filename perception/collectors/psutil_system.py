@@ -12,7 +12,7 @@ from .base import BaseCollector
 
 
 class PsutilSystemCollector(BaseCollector):
-    """采集宿主机总览指标与 Top N 进程快照。"""
+    """采集宿主机总览指标。"""
 
     def __init__(self, interval: int, top_processes: int = 5) -> None:
         super().__init__(
@@ -20,18 +20,14 @@ class PsutilSystemCollector(BaseCollector):
             interval=interval,
             required_capabilities={"cpu", "memory", "process"},
         )
-        self.top_processes = max(1, int(top_processes))
+        _ = top_processes
         self._disk_path = os.path.abspath(os.getcwd())
         psutil.cpu_percent(interval=None)
 
     def collect(self) -> Iterable[Observation]:
         """采集当前宿主机状态。"""
         timestamp = datetime.now()
-        observations: List[Observation] = []
-
-        observations.extend(self._collect_host_metrics(timestamp))
-        observations.extend(self._collect_top_process_metrics(timestamp))
-        return observations
+        return self._collect_host_metrics(timestamp)
 
     def _collect_host_metrics(self, timestamp: datetime) -> List[Observation]:
         """采集宿主机级别指标。"""
@@ -55,73 +51,6 @@ class PsutilSystemCollector(BaseCollector):
             self._build_observation("network.bytes_recv", net_io.bytes_recv, SourceType.NETWORK, timestamp),
             self._build_observation("process.count", process_count, SourceType.PROCESS, timestamp),
         ]
-
-    def _collect_top_process_metrics(self, timestamp: datetime) -> List[Observation]:
-        """采集按内存占用排序的 Top N 进程指标。"""
-        ranked = self._get_ranked_processes()
-        observations: List[Observation] = []
-
-        for rank, proc_info in enumerate(ranked[: self.top_processes], start=1):
-            base_tags = {
-                "pid": proc_info["pid"],
-                "name": proc_info["name"],
-                "status": proc_info["status"],
-                "rank": rank,
-            }
-            observations.append(
-                self._build_observation(
-                    "process.top.memory_percent",
-                    proc_info["memory_percent"],
-                    SourceType.PROCESS,
-                    timestamp,
-                    tags=base_tags,
-                )
-            )
-            observations.append(
-                self._build_observation(
-                    "process.top.cpu_percent",
-                    proc_info["cpu_percent"],
-                    SourceType.PROCESS,
-                    timestamp,
-                    tags=base_tags,
-                )
-            )
-            observations.append(
-                self._build_observation(
-                    "process.top.rss_bytes",
-                    proc_info["rss_bytes"],
-                    SourceType.PROCESS,
-                    timestamp,
-                    tags=base_tags,
-                )
-            )
-
-        return observations
-
-    def _get_ranked_processes(self) -> List[Dict[str, Any]]:
-        """采集进程快照并按内存占比排序。"""
-        processes: List[Dict[str, Any]] = []
-        for process in psutil.process_iter(["pid", "name", "status", "memory_percent"]):
-            try:
-                info = process.info
-                memory_percent = float(info.get("memory_percent") or 0.0)
-                cpu_percent = float(process.cpu_percent(interval=None) or 0.0)
-                memory_info = process.memory_info()
-                processes.append(
-                    {
-                        "pid": int(info.get("pid") or 0),
-                        "name": str(info.get("name") or "unknown"),
-                        "status": str(info.get("status") or "unknown"),
-                        "memory_percent": memory_percent,
-                        "cpu_percent": cpu_percent,
-                        "rss_bytes": int(getattr(memory_info, "rss", 0) or 0),
-                    }
-                )
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                continue
-
-        processes.sort(key=lambda item: item["memory_percent"], reverse=True)
-        return processes
 
     def _build_observation(
         self,

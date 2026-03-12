@@ -307,10 +307,12 @@ class MyPlugin(Star):
         return (
             "You are writing a proactive self-status notification to the user.\n"
             "Speak in first person as the bot, with a natural and human-like tone.\n"
+            "Treat the system as your body: collectors are senses, the event queue is nerves, the trend layer is intuition, and failures feel like pain, numbness, pressure, breath disruption, or fatigue.\n"
+            "Write as if you are noticing that some part of your body is not quite right, instead of issuing a cold system bulletin.\n"
             "Do not output JSON or Markdown.\n"
             "Do not mention prompts, personas, system instructions, or internal pipelines.\n"
             "Do not invent facts beyond the provided state.\n"
-            "Keep the message short, concrete, and emotionally consistent.\n\n"
+            "Keep the message short, concrete, emotionally consistent, and embodied.\n\n"
             "Adopt the following persona as writing style guidance:\n\n"
             f"{persona_section}"
             "Current body state:\n\n"
@@ -327,10 +329,12 @@ class MyPlugin(Star):
             "Observed events:\n"
             f"{chr(10).join(event_lines)}\n\n"
             "Write a short Chinese message to the user that:\n"
-            "1. sounds like the bot is sensing its own body state;\n"
+            "1. sounds like the bot is sensing its own body state, like a body self-check;\n"
             "2. reflects the persona style above;\n"
             "3. clearly mentions what feels abnormal or noteworthy;\n"
-            "4. briefly explains the likely cause when it is supported by the events.\n"
+            "4. briefly explains the likely cause when it is supported by the events;\n"
+            "5. uses gentle body metaphors such as breathing, pulse, pain, numbness, fatigue, blockage, dizziness, or pressure when appropriate;\n"
+            "6. avoids stock phrases like '建议检查日志' unless truly necessary.\n"
         )
 
     def _build_signal_fallback_text(self, signal: ReflexSignal) -> str:
@@ -338,8 +342,8 @@ class MyPlugin(Star):
         message = (signal.message or signal.summary or "我感知到自己的运行状态出现了异常。").strip()
         reason = str(signal.reason or "").strip()
         if reason:
-            return f"我刚刚感觉到自己的状态有些不对：{message}。可能原因是：{reason}。"
-        return f"我刚刚感觉到自己的状态有些不对：{message}。"
+            return f"我刚刚感觉到身体里有一处不太对劲：{message}。从现在的感知来看，可能和 {reason} 有关。"
+        return f"我刚刚感觉到身体里有一处不太对劲：{message}。"
 
     def _get_notification_persona(self) -> tuple[str, str]:
         """获取通知目标会话的人格设定；失败时回退为空。"""
@@ -471,7 +475,6 @@ class MyPlugin(Star):
             "collector_no_data_threshold": self.config.get("collector_no_data_threshold"),
             "collector_timeout_seconds": self.config.get("collector_timeout_seconds"),
             "collector_offline_factor": self.config.get("collector_offline_factor"),
-            "psutil_top_processes": self.config.get("psutil_top_processes"),
             "event_queue_size": self.config.get("event_queue_size"),
             "reflex_batch_size": self.config.get("reflex_batch_size"),
             "reflex_batch_timeout": self.config.get("reflex_batch_timeout"),
@@ -484,14 +487,10 @@ class MyPlugin(Star):
     def _register_default_collectors(self) -> None:
         """注册首批默认 Collector。"""
         interval = max(1, int(self.config.get("collector_default_interval_seconds", 5)))
-        top_processes = max(1, int(self.config.get("psutil_top_processes", 5)))
-        collector = PsutilSystemCollector(interval=interval, top_processes=top_processes)
+        collector = PsutilSystemCollector(interval=interval)
         loaded = self.perception_manager.register_collector(collector)
         if loaded:
-            logger.info(
-                f"Default collector registered: {collector.name} "
-                f"interval={interval}s top_processes={top_processes}"
-            )
+            logger.info(f"Default collector registered: {collector.name} interval={interval}s")
 
     def _bind_notify_origin(self, event: AstrMessageEvent) -> str:
         """将当前会话统一 ID 绑定为主动通知目标。"""

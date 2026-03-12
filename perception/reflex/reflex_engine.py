@@ -1,7 +1,7 @@
 """Reflex 主引擎。"""
 
 import asyncio
-from typing import Awaitable, Callable, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from astrbot.api import logger
 from ..events import EventManager
@@ -17,12 +17,14 @@ class ReflexEngine:
         self,
         event_manager: EventManager,
         llm_generate: Callable[[str], Awaitable[str]],
+        system_state_getter: Optional[Callable[[], Dict[str, Any]]] = None,
         batch_size: int = 10,
         batch_timeout: float = 5.0,
         rate_limit: float = 10.0,
     ) -> None:
         self.event_manager = event_manager
         self.llm_generate = llm_generate
+        self.system_state_getter = system_state_getter
         self.batch_size = max(1, batch_size)
         self.batch_timeout = max(0.1, batch_timeout)
         self.rate_limit = max(0.0, rate_limit)
@@ -96,7 +98,8 @@ class ReflexEngine:
                 events = await self._collect_batch()
                 if not events:
                     continue
-                prompt = self.prompt_builder.build(events)
+                system_state = self._get_system_state()
+                prompt = self.prompt_builder.build(events, system_state=system_state)
                 logger.debug(f"Reflex prompt built for events={len(events)}")
 
                 await self._rate_limit_check()
@@ -132,3 +135,13 @@ class ReflexEngine:
     async def get_signal(self) -> ReflexSignal:
         """获取一条 Reflex 信号。"""
         return await self.signal_queue.get()
+
+    def _get_system_state(self) -> Dict[str, Any]:
+        """获取当前系统状态快照，作为 Reflex 决策上下文。"""
+        if self.system_state_getter is None:
+            return {}
+        try:
+            return dict(self.system_state_getter() or {})
+        except Exception as exc:
+            logger.warning(f"Reflex system_state_getter failed: {exc}")
+            return {}

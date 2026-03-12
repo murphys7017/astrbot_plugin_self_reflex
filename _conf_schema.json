@@ -56,17 +56,12 @@
   "collector_timeout_seconds": {
     "description": "Collector 单次采集超时（秒）",
     "type": "float",
-    "default": 3.0
+    "default": 10.0
   },
   "collector_offline_factor": {
     "description": "Collector 离线判定倍率",
     "type": "int",
     "default": 3
-  },
-  "psutil_top_processes": {
-    "description": "PsutilSystemCollector 每轮保留的 Top 进程数量",
-    "type": "int",
-    "default": 5
   },
   "event_queue_size": {
     "description": "EventManager 队列大小",

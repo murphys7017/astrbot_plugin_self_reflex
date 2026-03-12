@@ -54,6 +54,10 @@ class BaseTrendStrategy(ABC):
         """判断当前策略是否接管某个 metric。"""
         return self.metric is None or self.metric == metric
 
+    def matches(self, identifier: str) -> bool:
+        """判断一个字符串标识是否命中当前策略。"""
+        return identifier == self.name or (self.metric is not None and identifier == self.metric)
+
     def should_run(self, now: float) -> bool:
         """
         根据 interval 判断策略当前是否应执行。

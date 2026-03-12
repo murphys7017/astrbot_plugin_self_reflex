@@ -22,6 +22,7 @@ class FallbackMetricTrendStrategy(BaseTrendStrategy):
     """
 
     SERIES_IDENTITY_KEYS = ("pid", "name", "rank", "status")
+    PERCENT_SUFFIX = ".percent"
 
     def __init__(
         self,
@@ -132,23 +133,50 @@ class FallbackMetricTrendStrategy(BaseTrendStrategy):
         if not values:
             return TrendDirection.STABLE
 
-        if self._is_long_saturation(values):
+        if self._is_percent_metric() and self._is_long_saturation(values):
             return TrendDirection.LONG_SATURATION
 
-        if abs(delta) <= self.stable_epsilon and abs(slope) <= self.stable_epsilon:
+        if self._is_stable(values=values, delta=delta, slope=slope):
             return TrendDirection.STABLE
 
-        if abs(delta) >= self.rapid_delta_threshold:
+        if self._is_rapid_change(values=values, delta=delta):
             return TrendDirection.RAPID_RISE if delta > 0 else TrendDirection.RAPID_DROP
 
         return TrendDirection.UP if slope > 0 else TrendDirection.DOWN
+
+    def _is_percent_metric(self) -> bool:
+        """判断当前策略是否处理百分比型指标。"""
+        return bool(self.metric and self.metric.endswith(self.PERCENT_SUFFIX))
+
+    def _is_stable(self, values: List[float], delta: float, slope: float) -> bool:
+        """根据指标口径判断是否稳定。"""
+        start_value = values[0]
+        baseline = max(abs(start_value), 1.0)
+
+        if self._is_percent_metric():
+            return abs(delta) <= 1.0 and abs(slope) <= 0.1
+
+        relative_delta = abs(delta) / baseline
+        return relative_delta <= 0.02 and abs(slope) <= self.stable_epsilon
+
+    def _is_rapid_change(self, values: List[float], delta: float) -> bool:
+        """根据指标口径判断是否快速变化。"""
+        start_value = values[0]
+        baseline = max(abs(start_value), 1.0)
+
+        if self._is_percent_metric():
+            return abs(delta) >= 10.0
+
+        relative_delta = abs(delta) / baseline
+        return relative_delta >= self.rapid_delta_threshold
 
     def _is_long_saturation(self, values: List[float]) -> bool:
         """判断是否出现长时间高位占满。"""
         if len(values) < 3:
             return False
 
-        high_count = sum(1 for value in values if value >= self.saturation_threshold)
+        threshold = 90.0 if self._is_percent_metric() else self.saturation_threshold
+        high_count = sum(1 for value in values if value >= threshold)
         return (high_count / len(values)) >= self.saturation_ratio
 
 

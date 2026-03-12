@@ -28,9 +28,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "collector_default_interval_seconds": 5,
     "collector_rate_limit": 200,
     "collector_no_data_threshold": 50,
-    "collector_timeout_seconds": 3,
+    "collector_timeout_seconds": 10,
     "collector_offline_factor": 3,
-    "psutil_top_processes": 5,
     "event_queue_size": 1000,
     "reflex_batch_size": 10,
     "reflex_batch_timeout": 5.0,
@@ -76,6 +75,7 @@ class PerceptionManager:
         self.reflex_engine = ReflexEngine(
             event_manager=self.event_manager,
             llm_generate=llm_generate,
+            system_state_getter=self.get_reflex_system_state,
             batch_size=int(cfg["reflex_batch_size"]),
             batch_timeout=float(cfg["reflex_batch_timeout"]),
             rate_limit=float(cfg["reflex_rate_limit"]),
@@ -174,7 +174,7 @@ class PerceptionManager:
     def register_trend_strategy(self, strategy: BaseTrendStrategy) -> None:
         """注册趋势策略。"""
         self.trend_engine.register_strategy(strategy)
-        logger.info(f"Trend strategy registered: metric={strategy.metric}")
+        logger.info(f"Trend strategy registered: name={strategy.name} metric={strategy.metric or '*'}")
 
     async def get_signal(self) -> ReflexSignal:
         """获取一条 Reflex 输出信号。"""
@@ -203,6 +203,22 @@ class PerceptionManager:
                 }
                 for task in self._tasks
             ],
+        }
+
+    def get_reflex_system_state(self) -> Dict[str, Any]:
+        """为 Reflex 提供当前系统状态快照。"""
+        status = self.get_system_status()
+        return {
+            "runtime": {
+                "running": status["running"],
+                "collectors_count": status["collectors_count"],
+                "stream_buffer_size": status["stream_buffer_size"],
+                "trend_count": status["trend_count"],
+                "event_queue_size": status["event_queue_size"],
+                "signal_queue_size": status["signal_queue_size"],
+            },
+            "collectors": status["collector_states"],
+            "latest_metrics": self._get_latest_metric_snapshot(),
         }
 
     def get_current_system_info(self) -> Dict[str, Any]:
@@ -254,6 +270,24 @@ class PerceptionManager:
             f"required={sorted(required)} current={sorted(current)}"
         )
         return required.issubset(current)
+
+    def _get_latest_metric_snapshot(self, limit: int = 50) -> Dict[str, Any]:
+        """提取当前 Observation 流中各 metric 的最新值，供 Reflex 参考。"""
+        now = datetime.now()
+        observations = self.stream.get_window(start=now - self.stream.time_window, end=now)
+        latest_metrics: Dict[str, Any] = {}
+        for obs in reversed(observations):
+            if obs.metric in latest_metrics:
+                continue
+            latest_metrics[obs.metric] = {
+                "value": self._to_json_safe(obs.value),
+                "source": obs.source.value,
+                "timestamp": obs.timestamp.isoformat(),
+                "tags": self._to_json_safe(obs.tags),
+            }
+            if len(latest_metrics) >= limit:
+                break
+        return dict(sorted(latest_metrics.items()))
 
     def _to_json_safe(self, value: Any) -> Any:
         """将常见 Python 对象转换为可 JSON 序列化结构。"""

@@ -19,7 +19,7 @@ sys.modules.setdefault("astrbot", astrbot_module)
 sys.modules.setdefault("astrbot.api", astrbot_api_module)
 
 from perception.events import EventManager
-from perception.models import Observation, SourceType, TrendDirection
+from perception.models import EventLevel, Observation, SourceType, TrendDirection
 from perception.stream import ObservationStream
 from perception.trend import BaseTrendStrategy, FallbackMetricTrendStrategy, TrendEngine
 
@@ -118,7 +118,10 @@ def test_trend_engine_uses_fallback_and_respects_explicit_coverage():
 
     assert len([trend for trend in trends if trend.metric == "memory.percent"]) == 1
     assert len([trend for trend in trends if trend.metric == "cpu.percent"]) == 1
-    assert event_manager.queue().qsize() == 0
+    event = event_manager.queue().get_nowait()
+    assert event.type == "TrendDetectedEvent"
+    assert event.level == EventLevel.WARNING
+    assert event.context["metric"] in {"memory.percent", "cpu.percent"}
     assert engine.fallback_strategy.window.total_seconds() == 30
     assert engine.fallback_strategy.interval.total_seconds() == 30
 
@@ -150,6 +153,44 @@ def test_trend_engine_emits_strategy_error_and_keeps_fallback_running():
 
     assert any(trend.metric == "cpu.percent" for trend in trends)
     assert all(trend.metric != "memory.percent" for trend in trends)
-    event = event_manager.queue().get_nowait()
-    assert event.type == "TrendStrategyErrorEvent"
-    assert event.context["strategy_name"] == "BrokenStrategy"
+    events = [event_manager.queue().get_nowait() for _ in range(event_manager.queue().qsize())]
+    assert any(event.type == "TrendStrategyErrorEvent" and event.context["strategy_name"] == "BrokenStrategy" for event in events)
+    assert any(event.type == "TrendDetectedEvent" and event.context["metric"] == "cpu.percent" for event in events)
+
+
+def test_percent_metrics_do_not_always_become_long_saturation():
+    strategy = FallbackMetricTrendStrategy(
+        metric="cpu.percent",
+        window=timedelta(seconds=30),
+        interval=timedelta(seconds=30),
+    )
+    now = datetime.now()
+    trends = strategy.compute_trends(
+        [
+            _obs("cpu.percent", 10.0, SourceType.CPU, now - timedelta(seconds=20)),
+            _obs("cpu.percent", 20.0, SourceType.CPU, now - timedelta(seconds=10)),
+            _obs("cpu.percent", 30.0, SourceType.CPU, now),
+        ]
+    )
+
+    assert len(trends) == 1
+    assert trends[0].direction == TrendDirection.RAPID_RISE
+
+
+def test_percent_metrics_can_still_become_long_saturation():
+    strategy = FallbackMetricTrendStrategy(
+        metric="memory.percent",
+        window=timedelta(seconds=30),
+        interval=timedelta(seconds=30),
+    )
+    now = datetime.now()
+    trends = strategy.compute_trends(
+        [
+            _obs("memory.percent", 95.0, SourceType.MEMORY, now - timedelta(seconds=20)),
+            _obs("memory.percent", 96.0, SourceType.MEMORY, now - timedelta(seconds=10)),
+            _obs("memory.percent", 97.0, SourceType.MEMORY, now),
+        ]
+    )
+
+    assert len(trends) == 1
+    assert trends[0].direction == TrendDirection.LONG_SATURATION
