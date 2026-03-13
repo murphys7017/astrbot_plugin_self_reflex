@@ -36,8 +36,8 @@ Self Reflex 持续采集运行时观测数据（Observation），做趋势分析
 - 如果没有绑定目标会话，插件会跳过主动发送，并记录 warning 日志。
 
 ### 使用示例
-![绑定会话](docs\imgs\bind.png)
-![通知效果](docs\imgs\notice.png)
+![绑定会话](docs/imgs/bind.png)
+![通知效果](docs/imgs/notice.png)
 
 ### 当前支持的监测项
 当前默认启用的监测包括：
