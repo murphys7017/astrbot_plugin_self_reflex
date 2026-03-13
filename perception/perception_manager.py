@@ -50,6 +50,7 @@ class PerceptionManager:
         if config:
             cfg.update(config)
         self.config = cfg
+        self._cwd = os.getcwd()
         logger.info("PerceptionManager initializing")
 
         # 统一事件总线：确保 Collector / Trend / Reflex 共享同一个 EventManager。
@@ -239,7 +240,7 @@ class PerceptionManager:
             "processor": platform.processor(),
             "python_version": sys.version.split()[0],
             "cpu_count": os.cpu_count(),
-            "cwd": os.getcwd(),
+            "cwd": self._cwd,
             "capabilities": sorted(capabilities),
         }
 

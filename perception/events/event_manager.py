@@ -27,8 +27,11 @@ class EventManager:
         当队列已满时，先丢弃最旧事件，再写入新事件。
         """
         if self._queue.full():
-            self._queue.get_nowait()
-            logger.debug("EventManager queue full: dropped oldest event")
+            try:
+                self._queue.get_nowait()
+                logger.debug("EventManager queue full: dropped oldest event")
+            except asyncio.QueueEmpty:
+                logger.debug("EventManager queue was drained before dropping oldest event")
         self._queue.put_nowait(event)
         logger.debug(
             f"Event submitted: type={event.type} level={event.level.value} size={self._queue.qsize()}"
