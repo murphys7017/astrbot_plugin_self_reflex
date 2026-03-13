@@ -12,6 +12,41 @@ Self Reflex 持续采集运行时观测数据（Observation），做趋势分析
 当前已实现的首个 Collector 为基于 `psutil` 的宿主机总览采集器，可输出 CPU、内存、交换分区、磁盘、网络和进程总数。
 当前还内置了一个兜底 Fallback Trend，会对数值型 Observation 自动做趋势分析，后续专用 Trend 可以覆盖默认行为。
 
+## 2.1 当前可监测数据
+当前默认启用的 `PsutilSystemCollector` 会周期采集以下宿主机指标：
+
+- `cpu.percent`：CPU 总使用率
+- `memory.percent`：物理内存使用率
+- `memory.used_bytes`：已使用物理内存
+- `memory.available_bytes`：可用物理内存
+- `swap.percent`：交换分区使用率
+- `swap.used_bytes`：已使用交换分区
+- `disk.percent`：当前工作目录所在磁盘分区使用率
+- `disk.used_bytes`：当前工作目录所在磁盘已用空间
+- `disk.free_bytes`：当前工作目录所在磁盘剩余空间
+- `network.bytes_sent`：累计发送字节数
+- `network.bytes_recv`：累计接收字节数
+- `process.count`：当前宿主机进程总数
+
+这些指标都以 `Observation` 形式进入 `ObservationStream`，随后由趋势层统一分析。
+
+### 现在可以识别的趋势
+当前内置的 `FallbackMetricTrendStrategy` 会对所有可转为数值的指标自动分析，并输出以下趋势类型：
+
+- `stable`：基本稳定
+- `up`：持续上升
+- `down`：持续下降
+- `rapid_rise`：短时间快速上升
+- `rapid_drop`：短时间快速下降
+- `long_saturation`：长时间高位占满
+
+其中目前会被升级为事件、再交给 Reflex/LLM 判断是否通知用户的，是 `long_saturation`。例如：
+
+- `cpu.percent` 长时间接近 100%
+- `memory.percent` 长时间处于高位
+- `disk.percent` 长时间接近占满
+- `swap.percent` 长时间高负载
+
 ## 3. Why Self Reflex
 在 AI Agent 场景中，系统健康状态会直接影响模型行为质量。  
 Self Reflex 解决的是“AI 如何感知自己正在发生什么”：
@@ -76,14 +111,14 @@ Signal
   总调度层，负责模块连接、生命周期管理、系统状态查询与趋势查询接口。
 
 ## 7. Example Scenario
-以“内存持续增长”为例：
+现在比较贴近当前实现的例子是“CPU 长时间占满”：
 
 ```text
-MemoryCollector
+PsutilSystemCollector
    ↓
-Observation(memory_usage)
+Observation(cpu.percent)
    ↓
-TrendEngine 识别持续上升趋势
+TrendEngine 识别 long_saturation
    ↓
 EventManager 生成/缓存事件
    ↓
@@ -95,7 +130,7 @@ Signal(push=true)
 ```
 
 最终用户收到类似：
-“我最近感知到内存占用持续上升，可能存在进程泄漏或任务堆积，建议检查最近启动的服务。”
+“我刚刚感觉到自己的运转一直绷得很紧，CPU 已经持续顶在高位，像是呼吸一直压不上来，可能有任务把算力长期占住了。”
 
 ## 8. Installation
 将插件克隆到 AstrBot 插件目录：
@@ -193,11 +228,11 @@ Reflex Signal 结构（当前实现）：
 
 ## 12. Roadmap
 1. 增加更多 Collector
-- CPU
-- Memory
-- Logs
-- File changes
-- Network
+- 更细粒度 CPU / Memory / Disk / Network Collector
+- GPU Collector
+- Logs Collector
+- File changes Collector
+- 外部服务与 API 健康检查 Collector
 
 2. 与 `astrbot_plugin_self_code` 集成
 - Self Reflex 负责检测问题

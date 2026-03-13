@@ -272,7 +272,7 @@ class MyPlugin(Star):
             if sent:
                 logger.info("Signal notification sent")
             else:
-                logger.debug("Signal notification skipped: no notify target bound")
+                logger.warning("Signal notification was generated but delivery did not succeed")
         except Exception as exc:
             logger.error(f"signal notify failed: {exc}")
 
@@ -313,15 +313,22 @@ class MyPlugin(Star):
             event_lines = ["1. [info] No detailed events attached."]
         return (
             "You are writing a proactive self-status notification to the user.\n"
-            "Speak in first person as the bot, with a natural and human-like tone.\n"
-            "Treat the system as your body: collectors are senses, the event queue is nerves, the trend layer is intuition, and failures feel like pain, numbness, pressure, breath disruption, or fatigue.\n"
-            "Write as if you are noticing that some part of your body is not quite right, instead of issuing a cold system bulletin.\n"
-            "Use the current session's existing persona and memory automatically; do not expose internal persona details.\n"
+            "Speak in first person as the bot, in natural Chinese.\n"
+            "This is an AI self-status broadcast, not a cold system bulletin.\n"
+            "Use a style that is about 30% persona and 70% technical description.\n"
+            "Prefer a simple structure when useful: status category -> current state -> user impact.\n"
+            "Available status categories include: compute state, memory state, inference state, network state, system state.\n"
+            "Use natural expressions like 'CPU 正在高负载运行', '系统压力较大', '我正在分析', '网络响应稍慢'.\n"
+            "Do not use strange or overly dramatic body metaphors such as 'CPU 呼吸困难', '系统窒息', or '我的脉搏'.\n"
             "Do not output JSON or Markdown.\n"
-            "Do not mention prompts, personas, system instructions, or internal pipelines.\n"
+            "Do not mention prompts, personas, system instructions, memory, or internal pipelines.\n"
             "Do not invent facts beyond the provided state.\n"
-            "Keep the message short, concrete, emotionally consistent, and embodied.\n\n"
-            "Current body state:\n\n"
+            "Keep the message short, concrete, believable, and a little personalized.\n\n"
+            "Preferred examples of tone:\n"
+            "- 我这边 CPU 正在高负载运行，回复可能会稍微慢一点。\n"
+            "- 当前系统压力有点大，不过整体还算稳定。\n"
+            "- 我正在分析这个问题，可能需要一点时间。\n\n"
+            "Current system state:\n\n"
             f"Level: {signal.level}\n"
             f"Message: {message}\n"
             f"Summary: {signal.summary}\n"
@@ -335,26 +342,33 @@ class MyPlugin(Star):
             "Observed events:\n"
             f"{chr(10).join(event_lines)}\n\n"
             "Write a short Chinese message to the user that:\n"
-            "1. sounds like the bot is sensing its own body state, like a body self-check;\n"
-            "2. reflects the current session persona naturally;\n"
-            "3. clearly mentions what feels abnormal or noteworthy;\n"
-            "4. briefly explains the likely cause when it is supported by the events;\n"
-            "5. uses gentle body metaphors such as breathing, pulse, pain, numbness, fatigue, blockage, dizziness, or pressure when appropriate;\n"
-            "6. avoids stock phrases like '建议检查日志' unless truly necessary.\n"
+            "1. sounds like a natural self-status update from the bot;\n"
+            "2. clearly mentions what is abnormal or noteworthy;\n"
+            "3. briefly explains the likely cause when it is supported by the events;\n"
+            "4. mentions user impact when relevant, such as slower replies or short delays;\n"
+            "5. may use light wording like '我这边', '当前', '正在', but should stay technically grounded;\n"
+            "6. avoids exaggerated anthropomorphic phrases and avoids stock phrases like '建议检查日志' unless truly necessary;\n"
+            "7. can be just one short sentence if the situation is simple.\n"
         )
 
     def _build_signal_fallback_text(self, signal: ReflexSignal) -> str:
         """当通知 LLM 不可用时，构建一个可直接发送的保底文案。"""
-        message = (signal.message or signal.summary or "我感知到自己的运行状态出现了异常。").strip()
+        message = (signal.message or signal.summary or "我这边的运行状态出现了一点异常。").strip()
         reason = str(signal.reason or "").strip()
         if reason:
-            return f"我刚刚感觉到身体里有一处不太对劲：{message}。从现在的感知来看，可能和 {reason} 有关。"
-        return f"我刚刚感觉到身体里有一处不太对劲：{message}。"
+            return f"我这边检测到一个状态变化：{message}。从当前信息看，可能和 {reason} 有关。"
+        return f"我这边检测到一个状态变化：{message}。"
 
     async def _llm_generate_for_reflex(self, prompt: str) -> str:
         """提供给 Perception ReflexEngine 的 LLM 生成函数。"""
-        logger.debug(f"Reflex llm_generate called with prompt length={len(prompt)}")
-        resp = await self._call_llm(prompt)
+        provider_id = self._default_provider_id or self._resolve_chat_provider_id()
+        provider_info = self._describe_provider(provider_id)
+        logger.info(
+            f"Reflex LLM call: provider_id={provider_id or '<none>'} "
+            f"provider_type={provider_info['type']} model={provider_info['model']} "
+            f"prompt_length={len(prompt)}"
+        )
+        resp = await self._call_llm(prompt, provider_id=provider_id)
         return self._extract_completion_text(resp)
 
     async def _call_agent(self, prompt: str) -> Any:
@@ -365,26 +379,62 @@ class MyPlugin(Star):
                 "No suitable event is cached for tool_loop_agent. "
                 "Run /perception status in the notification target session first."
             )
+        contexts = await self._get_notify_session_contexts(event)
         provider_id = self._default_provider_id
         if not provider_id:
             provider_id = await self.context.get_current_chat_provider_id(umo=event.unified_msg_origin)
+        provider_info = self._describe_provider(provider_id)
         logger.debug(
             f"Calling tool_loop_agent for prompt length={len(prompt)} "
-            f"umo={event.unified_msg_origin} provider_id={provider_id}"
+            f"umo={event.unified_msg_origin} provider_id={provider_id} contexts={len(contexts)}"
+        )
+        logger.info(
+            f"Signal Agent call: provider_id={provider_id or '<none>'} "
+            f"provider_type={provider_info['type']} model={provider_info['model']} "
+            f"umo={event.unified_msg_origin} contexts={len(contexts)} prompt_length={len(prompt)}"
         )
         return await self.context.tool_loop_agent(
             event=event,
             chat_provider_id=provider_id,
             prompt=prompt,
-            contexts=[],
+            contexts=contexts,
             max_steps=6,
             tool_call_timeout=30,
         )
 
-    async def _call_llm(self, prompt: str) -> Any:
+    async def _get_notify_session_contexts(self, event: AstrMessageEvent) -> List[Dict[str, Any]]:
+        """读取通知目标会话的当前对话历史，供 Agent 续接上下文。"""
+        conv_mgr = getattr(self.context, "conversation_manager", None)
+        if conv_mgr is None:
+            logger.warning("Conversation manager is unavailable; continue without session contexts")
+            return []
+
+        try:
+            umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+            if not umo:
+                return []
+            conversation_id = await conv_mgr.get_curr_conversation_id(umo)
+            if not conversation_id:
+                logger.debug(f"No active conversation id for notify session: umo={umo}")
+                return []
+            conversation = await conv_mgr.get_conversation(umo, conversation_id)
+            if conversation is None or not getattr(conversation, "history", ""):
+                logger.debug(f"No conversation history for notify session: umo={umo} cid={conversation_id}")
+                return []
+            history = json.loads(conversation.history)
+            if not isinstance(history, list):
+                logger.warning(
+                    f"Conversation history format is invalid for notify session: umo={umo} cid={conversation_id}"
+                )
+                return []
+            return [item for item in history if isinstance(item, dict)]
+        except Exception as exc:
+            logger.warning(f"Failed to load notify session contexts: {exc}")
+            return []
+
+    async def _call_llm(self, prompt: str, provider_id: str = "") -> Any:
         """调用 AstrBot LLM 接口。"""
-        logger.debug(f"Calling LLM for prompt length={len(prompt)}")
-        provider_id = self._default_provider_id or self._resolve_chat_provider_id()
+        provider_id = provider_id or self._default_provider_id or self._resolve_chat_provider_id()
         if not provider_id:
             raise RuntimeError(
                 "No chat provider is available. Please configure `default_provider_id` "
@@ -395,6 +445,24 @@ class MyPlugin(Star):
             prompt=prompt,
             contexts=[],
         )
+
+    def _describe_provider(self, provider_id: str) -> Dict[str, str]:
+        """读取 provider 的基础信息，供日志输出。"""
+        if not provider_id:
+            return {"id": "", "type": "<unknown>", "model": "<unknown>"}
+        try:
+            provider = self.context.get_provider_by_id(provider_id)
+            if provider is None:
+                return {"id": provider_id, "type": "<missing>", "model": "<unknown>"}
+            meta = provider.meta()
+            return {
+                "id": str(getattr(meta, "id", provider_id) or provider_id),
+                "type": str(getattr(meta, "type", "<unknown>") or "<unknown>"),
+                "model": str(getattr(meta, "model", "<unknown>") or "<unknown>"),
+            }
+        except Exception as exc:
+            logger.warning(f"Failed to describe provider {provider_id}: {exc}")
+            return {"id": provider_id, "type": "<error>", "model": "<unknown>"}
 
     def _resolve_chat_provider_id(self) -> str:
         """解析当前可用对话 Provider ID。"""
@@ -431,9 +499,15 @@ class MyPlugin(Star):
         target = self._get_notify_target()
         if target:
             chain = MessageChain().message(text)
-            await self.context.send_message(target, chain)
-            logger.debug("Notification sent by unified_msg_origin")
-            return True
+            sent = await self.context.send_message(target, chain)
+            if sent:
+                logger.debug(f"Notification sent by unified_msg_origin: target={target}")
+                return True
+            logger.warning(
+                "Notification delivery failed: platform/session not found or active send unsupported. "
+                f"target={target}"
+            )
+            return False
 
         logger.warning(
             "No notify target unified_msg_origin configured. "
@@ -616,13 +690,25 @@ class MyPlugin(Star):
             GetRecentSignalsTool(getter=self._get_recent_signals),
             GetRecentEventsTool(getter=self._get_recent_events),
         ]
+        # Dashboard 通过 handler_module_path -> star_map 映射来源。
+        # 明确绑定到当前插件模块，避免被识别为 unknown。
+        module_path = self.__class__.__module__
+        for tool in tools:
+            tool.handler_module_path = module_path
 
         if hasattr(self.context, "add_llm_tools"):
             self.context.add_llm_tools(*tools)
-            logger.info(f"LLM tools registered by add_llm_tools: count={len(tools)}")
+            for tool in tools:
+                tool.handler_module_path = module_path
+            logger.info(
+                f"LLM tools registered by add_llm_tools: count={len(tools)} module_path={module_path}"
+            )
             return
 
         tool_mgr = self.context.provider_manager.llm_tools
         for tool in tools:
+            tool.handler_module_path = module_path
             tool_mgr.func_list.append(tool)
-        logger.info(f"LLM tools registered by legacy manager: count={len(tools)}")
+        logger.info(
+            f"LLM tools registered by legacy manager: count={len(tools)} module_path={module_path}"
+        )

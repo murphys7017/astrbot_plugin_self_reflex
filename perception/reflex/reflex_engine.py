@@ -104,7 +104,9 @@ class ReflexEngine:
 
                 await self._rate_limit_check()
                 try:
+                    logger.debug(f"Reflex LLM request submitting: events={len(events)} prompt_length={len(prompt)}")
                     llm_text = await self.llm_generate(prompt)
+                    logger.debug(f"Reflex LLM response received: text_length={len(llm_text or '')}")
                     signal = self.decision_parser.parse(llm_text, events)
                 except Exception as exc:
                     signal = ReflexSignal(

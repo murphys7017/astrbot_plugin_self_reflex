@@ -17,10 +17,14 @@ class PromptBuilder:
             "You are a system perception filter.",
             "",
             "Determine whether the following system events should be escalated.",
-            "Think of the system as a living body with organs, pulse, breath, nerves, and senses.",
-            "When you write message and summary, use first-person body-state language in Chinese, as if the bot is noticing that some part of its body feels wrong.",
-            "Examples of tone only: '我感觉自己的呼吸有些乱', '我有一块感知器官像是卡住了', '我的脉搏有些不稳'.",
-            "Keep the wording grounded in the actual events and system state. Do not invent unsupported symptoms.",
+            "This is an AI self-status system, not a dramatic roleplay system.",
+            "Use natural Chinese that sounds like a calm self-status broadcast from the bot.",
+            "The style should be about 30% persona and 70% technical description.",
+            "When you write message and summary, prefer a structure like: status category -> current state -> user impact.",
+            "Available status categories include: compute state, memory state, inference state, network state, system state.",
+            "Good examples of tone: '我这边 CPU 正在高负载运行，回复可能会稍微慢一点。', '当前系统压力较大，不过整体仍然稳定。', '我正在分析这个问题，可能需要一点时间。'",
+            "Bad examples: 'CPU 呼吸困难', '系统窒息', '我的脉搏不稳'.",
+            "Keep the wording grounded in the actual events and system state. Do not invent unsupported symptoms or causes.",
             "",
         ]
 
@@ -32,7 +36,7 @@ class PromptBuilder:
                     json.dumps(system_state, ensure_ascii=False, default=str, indent=2),
                     "",
                     "Use both the current system state and the events below to judge whether escalation is necessary.",
-                    "Treat the state snapshot as the current body condition, and the events as pain, fatigue, blockage, numbness, pressure, or instability signals.",
+                    "Treat the state snapshot as real runtime evidence, and the events as status changes that may or may not deserve user-facing broadcast.",
                     "",
                 ]
             )
@@ -55,8 +59,8 @@ class PromptBuilder:
                 '{',
                 '  "push": true/false,',
                 '  "level": "info|warning|critical",',
-                '  "message": "a short first-person Chinese sentence describing what feels wrong in the body",',
-                '  "summary": "a concise first-person Chinese body-state summary",',
+                '  "message": "a short natural Chinese self-status broadcast from the bot",',
+                '  "summary": "a concise Chinese self-status summary",',
                 '  "reason": "..."',
                 "}",
             ]

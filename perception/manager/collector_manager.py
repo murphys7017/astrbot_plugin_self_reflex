@@ -164,7 +164,6 @@ class CollectorManager:
 
         if tasks:
             await asyncio.gather(*tasks)
-            logger.debug(f"Collector tick executed: scheduled={len(tasks)}")
 
         await self._monitor_health()
 
@@ -185,24 +184,16 @@ class CollectorManager:
         if state.first_run_at is None:
             state.first_run_at = now
         state.last_run = now
-        logger.debug(f"Collector run started: {collector.name}")
 
         try:
             observations = await self._collect_observations(collector)
             limited = self.apply_rate_limit(observations)
-            logger.debug(
-                f"Collector run result: {collector.name} raw={len(observations)} limited={len(limited)}"
-            )
             if limited:
                 self.stream.push_many(limited)
                 state.last_push = datetime.now()
                 state.consecutive_no_data = 0
             else:
                 state.consecutive_no_data += 1
-                logger.debug(
-                    f"Collector no-data count increased: {collector.name} "
-                    f"count={state.consecutive_no_data}"
-                )
                 if state.consecutive_no_data >= self.no_data_threshold:
                     await self._emit_event(
                         event_type="CollectorNoDataEvent",
@@ -220,7 +211,6 @@ class CollectorManager:
             state.last_success = datetime.now()
             state.error_count = 0
             state.status = "RUNNING"
-            logger.debug(f"Collector run success: {collector.name}")
         except asyncio.TimeoutError:
             state.error_count += 1
             state.status = "ERROR"
@@ -339,7 +329,7 @@ class CollectorManager:
             context=context or {},
         )
         await self.event_manager.submit_event(event)
-        logger.debug(f"Collector event emitted: type={event_type} level={level.value}")
+        logger.info(f"Collector event emitted: type={event_type} level={level.value}")
 
     @staticmethod
     def _collect_sync(collector: BaseCollector) -> Iterable[Observation]:
