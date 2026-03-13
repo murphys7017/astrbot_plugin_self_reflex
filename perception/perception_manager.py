@@ -17,7 +17,7 @@ from .manager import CollectorManager
 from .models import Trend
 from .reflex import ReflexEngine, ReflexSignal
 from .stream import ObservationStream
-from .trend import BaseTrendStrategy, TrendEngine
+from .trend import BaseTrendStrategy, GpuTemperatureTrendStrategy, TrendEngine
 
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -32,6 +32,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "collector_timeout_seconds": 10,
     "collector_offline_factor": 3,
     "event_queue_size": 1000,
+    "gpu_temp_trend_window_seconds": 120.0,
+    "gpu_temp_trend_interval_seconds": 30.0,
+    "gpu_temp_high_threshold_c": 85.0,
+    "gpu_temp_recovery_threshold_c": 80.0,
+    "gpu_temp_saturation_ratio": 0.7,
+    "gpu_temp_min_samples": 3,
     "reflex_batch_size": 10,
     "reflex_batch_timeout": 5.0,
     "reflex_rate_limit": 10.0,
@@ -74,6 +80,16 @@ class PerceptionManager:
             fallback_window=timedelta(seconds=float(cfg["fallback_trend_window_seconds"])),
             fallback_interval=timedelta(seconds=float(cfg["trend_interval_seconds"])),
             trend_event_cooldown=timedelta(seconds=float(cfg["trend_event_cooldown_seconds"])),
+        )
+        self.trend_engine.register_strategy(
+            GpuTemperatureTrendStrategy(
+                window=timedelta(seconds=float(cfg["gpu_temp_trend_window_seconds"])),
+                interval=timedelta(seconds=float(cfg["gpu_temp_trend_interval_seconds"])),
+                high_temp_threshold_c=float(cfg["gpu_temp_high_threshold_c"]),
+                recovery_temp_threshold_c=float(cfg["gpu_temp_recovery_threshold_c"]),
+                saturation_ratio=float(cfg["gpu_temp_saturation_ratio"]),
+                min_samples=int(cfg["gpu_temp_min_samples"]),
+            )
         )
         self.reflex_engine = ReflexEngine(
             event_manager=self.event_manager,
@@ -149,10 +165,10 @@ class PerceptionManager:
 
         返回：
             True: 已加载
-            False: 当前系统不满足 collector 所需能力，未加载
+            False: 当前系统不满足 collector 启动条件，未加载
         """
-        if not self._can_load_collector(collector):
-            logger.info(f"Collector skipped due to missing capabilities: {collector.name}")
+        system_info = self.get_current_system_info()
+        if not self._can_load_collector(collector, system_info):
             return False
 
         self.collector_manager.register(collector)
@@ -263,17 +279,34 @@ class PerceptionManager:
             return None
         return trends[0]
 
-    def _can_load_collector(self, collector: BaseCollector) -> bool:
-        """判断当前系统是否满足 collector 的能力要求。"""
+    def _can_load_collector(self, collector: BaseCollector, system_info: Optional[Dict[str, Any]] = None) -> bool:
+        """判断当前系统是否满足 collector 的能力要求与平台启用条件。"""
+        system_info = dict(system_info or self.get_current_system_info())
         required = set(getattr(collector, "required_capabilities", set()) or set())
-        if not required:
-            return True
-        current = set(self.get_current_system_info()["capabilities"])
+        current = set(system_info.get("capabilities", []) or [])
         logger.debug(
             f"Collector capability check: name={collector.name} "
             f"required={sorted(required)} current={sorted(current)}"
         )
-        return required.issubset(current)
+        if required and not required.issubset(current):
+            logger.info(f"Collector skipped due to missing capabilities: {collector.name}")
+            return False
+
+        if not required:
+            logger.debug(f"Collector capability check passed without requirements: {collector.name}")
+
+        try:
+            enabled = bool(collector.should_enable(system_info))
+        except Exception as exc:
+            logger.warning(f"Collector platform check failed: {collector.name} error={exc}")
+            return False
+        if not enabled:
+            logger.info(
+                f"Collector skipped by platform check: {collector.name} "
+                f"os={system_info.get('os')} capabilities={system_info.get('capabilities')}"
+            )
+            return False
+        return True
 
     def _get_latest_metric_snapshot(self, limit: int = 50) -> Dict[str, Any]:
         """提取当前 Observation 流中各 metric 的最新值，供 Reflex 参考。"""

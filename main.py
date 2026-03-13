@@ -14,7 +14,12 @@ from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
 
-from .perception.collectors import PsutilSystemCollector
+from .perception.collectors import (
+    LinuxCpuTemperatureCollector,
+    NvidiaGpuCollector,
+    PsutilSystemCollector,
+    WindowsCpuTemperatureCollector,
+)
 from .perception.perception_manager import PerceptionManager
 from .perception.reflex import ReflexSignal
 
@@ -577,6 +582,14 @@ class MyPlugin(Star):
             "collector_timeout_seconds": self.config.get("collector_timeout_seconds"),
             "collector_offline_factor": self.config.get("collector_offline_factor"),
             "event_queue_size": self.config.get("event_queue_size"),
+            "cpu_temp_collector_interval_seconds": self.config.get("cpu_temp_collector_interval_seconds"),
+            "windows_cpu_temp_collector_interval_seconds": self.config.get("windows_cpu_temp_collector_interval_seconds"),
+            "gpu_temp_trend_window_seconds": self.config.get("gpu_temp_trend_window_seconds"),
+            "gpu_temp_trend_interval_seconds": self.config.get("gpu_temp_trend_interval_seconds"),
+            "gpu_temp_high_threshold_c": self.config.get("gpu_temp_high_threshold_c"),
+            "gpu_temp_recovery_threshold_c": self.config.get("gpu_temp_recovery_threshold_c"),
+            "gpu_temp_saturation_ratio": self.config.get("gpu_temp_saturation_ratio"),
+            "gpu_temp_min_samples": self.config.get("gpu_temp_min_samples"),
             "reflex_batch_size": self.config.get("reflex_batch_size"),
             "reflex_batch_timeout": self.config.get("reflex_batch_timeout"),
             "reflex_rate_limit": self.config.get("reflex_rate_limit"),
@@ -588,10 +601,20 @@ class MyPlugin(Star):
     def _register_default_collectors(self) -> None:
         """注册首批默认 Collector。"""
         interval = max(1, int(self.config.get("collector_default_interval_seconds", 5)))
-        collector = PsutilSystemCollector(interval=interval)
-        loaded = self.perception_manager.register_collector(collector)
-        if loaded:
-            logger.info(f"Default collector registered: {collector.name} interval={interval}s")
+        default_collectors = [PsutilSystemCollector(interval=interval)]
+        cpu_temp_interval = max(1, int(self.config.get("cpu_temp_collector_interval_seconds", interval)))
+        default_collectors.append(LinuxCpuTemperatureCollector(interval=cpu_temp_interval))
+        windows_cpu_temp_interval = max(
+            1, int(self.config.get("windows_cpu_temp_collector_interval_seconds", interval))
+        )
+        default_collectors.append(WindowsCpuTemperatureCollector(interval=windows_cpu_temp_interval))
+        gpu_interval = max(1, int(self.config.get("gpu_collector_interval_seconds", interval)))
+        default_collectors.append(NvidiaGpuCollector(interval=gpu_interval))
+
+        for collector in default_collectors:
+            loaded = self.perception_manager.register_collector(collector)
+            if loaded:
+                logger.info(f"Default collector registered: {collector.name} interval={collector.interval}s")
 
     def _bind_notify_origin(self, event: AstrMessageEvent) -> str:
         """将当前会话统一 ID 绑定为主动通知目标。"""

@@ -24,6 +24,11 @@ class PsutilSystemCollector(BaseCollector):
         self._disk_path = os.path.abspath(os.getcwd())
         psutil.cpu_percent(interval=None)
 
+    def should_enable(self, system_info: Dict[str, Any]) -> bool:
+        """默认宿主机采集器在常见桌面/服务器平台均启用。"""
+        os_name = str(system_info.get("os", "") or "").strip().lower()
+        return os_name in {"windows", "linux", "darwin"}
+
     def collect(self) -> Iterable[Observation]:
         """采集当前宿主机状态。"""
         timestamp = datetime.now()

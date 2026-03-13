@@ -1,7 +1,7 @@
 """Collector 抽象接口定义。"""
 
 from abc import ABC, abstractmethod
-from typing import Iterable, Optional, Set
+from typing import Any, Dict, Iterable, Optional, Set
 
 from ..models import Observation
 
@@ -31,6 +31,11 @@ class BaseCollector(ABC):
         self.name = name
         self.interval = interval
         self.required_capabilities = set(required_capabilities or set())
+
+    @abstractmethod
+    def should_enable(self, system_info: Dict[str, Any]) -> bool:
+        """根据宿主平台信息判断当前 Collector 是否应被启用。"""
+        raise NotImplementedError
 
     @abstractmethod
     def collect(self) -> Iterable[Observation]:

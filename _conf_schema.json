@@ -49,6 +49,54 @@
     "type": "int",
     "default": 5
   },
+  "cpu_temp_collector_interval_seconds": {
+    "description": "Linux CPU 温度 Collector 采集间隔（秒）",
+    "type": "int",
+    "default": 5,
+    "hint": "仅对 LinuxCpuTemperatureCollector 生效；未配置时复用 collector_default_interval_seconds"
+  },
+  "windows_cpu_temp_collector_interval_seconds": {
+    "description": "Windows CPU 温度 Collector 采集间隔（秒）",
+    "type": "int",
+    "default": 5,
+    "hint": "仅对 WindowsCpuTemperatureCollector 生效；依赖 WMI/CIM 温度源，部分机器可能无数据"
+  },
+  "gpu_collector_interval_seconds": {
+    "description": "NVIDIA GPU Collector 采集间隔（秒）",
+    "type": "int",
+    "default": 5,
+    "hint": "仅对 NvidiaGpuCollector 生效；未配置时复用 collector_default_interval_seconds"
+  },
+  "gpu_temp_trend_window_seconds": {
+    "description": "GPU 温度专用趋势窗口（秒）",
+    "type": "float",
+    "default": 120.0
+  },
+  "gpu_temp_trend_interval_seconds": {
+    "description": "GPU 温度专用趋势分析间隔（秒）",
+    "type": "float",
+    "default": 30.0
+  },
+  "gpu_temp_high_threshold_c": {
+    "description": "GPU 高温阈值（摄氏度）",
+    "type": "float",
+    "default": 85.0
+  },
+  "gpu_temp_recovery_threshold_c": {
+    "description": "GPU 温度恢复阈值（摄氏度）",
+    "type": "float",
+    "default": 80.0
+  },
+  "gpu_temp_saturation_ratio": {
+    "description": "GPU 温度窗口内高温占比阈值（0-1）",
+    "type": "float",
+    "default": 0.7
+  },
+  "gpu_temp_min_samples": {
+    "description": "GPU 温度趋势最小样本数",
+    "type": "int",
+    "default": 3
+  },
   "collector_rate_limit": {
     "description": "Collector 每次最大推送 Observation 数",
     "type": "int",

@@ -9,8 +9,20 @@
 
 Self Reflex 持续采集运行时观测数据（Observation），做趋势分析（Trend），统一事件流（Event），再通过 LLM 判断是否需要对用户发出自然语言提醒。
 
-当前已实现的首个 Collector 为基于 `psutil` 的宿主机总览采集器，可输出 CPU、内存、交换分区、磁盘、网络和进程总数。
+当前已实现的 Collector 包括：
+
+- 基于 `psutil` 的宿主机总览采集器（CPU、内存、交换分区、磁盘、网络、进程）
+- 基于 `psutil` / `/sys/class/thermal` / `hwmon` 的 Linux CPU 温度采集器
+- 基于 Windows WMI/CIM (`MSAcpi_ThermalZoneTemperature`) 的 Windows CPU 温度采集器
+- 基于 `nvidia-smi` 的 NVIDIA GPU 采集器（温度、利用率、显存）
 当前还内置了一个兜底 Fallback Trend，会对数值型 Observation 自动做趋势分析，后续专用 Trend 可以覆盖默认行为。
+
+Collector 的启用现在分为两层判断：
+
+- `required_capabilities`：声明 collector 依赖哪些系统能力，例如 `cpu`、`memory`、`gpu`
+- `should_enable(system_info)`：由 collector 自己根据 `PerceptionManager` 传入的平台信息决定是否启用
+
+其中 `system_info` 由 `PerceptionManager.get_current_system_info()` 生成，包含当前宿主机的 `os`、`os_release`、`machine`、`processor`、`cpu_count`、`cwd` 和 `capabilities` 等信息，可用于做 Windows / Linux / macOS 的平台分流。
 
 ## 2.1 当前可监测数据
 当前默认启用的 `PsutilSystemCollector` 会周期采集以下宿主机指标：
@@ -30,6 +42,26 @@ Self Reflex 持续采集运行时观测数据（Observation），做趋势分析
 
 这些指标都以 `Observation` 形式进入 `ObservationStream`，随后由趋势层统一分析。
 
+当宿主机平台为 Linux 且存在可用温度源时，`LinuxCpuTemperatureCollector` 会自动启用并采集：
+
+- `cpu.temperature_c`：CPU 温度（摄氏度）
+
+当前实现会优先尝试 `psutil.sensors_temperatures()`，若无结果则回退读取 `/sys/class/hwmon` 与 `/sys/class/thermal`。由于当前开发环境无法直接在 Linux 机器上联调，这部分还需要后续实机验证。
+
+当宿主机平台为 Windows 且系统暴露了可用温度源时，`WindowsCpuTemperatureCollector` 会自动启用并采集：
+
+- `cpu.temperature_c`：CPU 温度（摄氏度）
+
+当前实现通过 `Get-CimInstance root/wmi:MSAcpi_ThermalZoneTemperature` 读取温度。这套接口在不同机器上的支持情况差异较大，有些设备会无数据，或者拿到的是 ACPI 热区温度而不是非常精确的 CPU 核心温度，因此也建议后续做实机验证。
+
+当宿主机存在可用 `nvidia-smi` 且平台为 Windows/Linux 时，`NvidiaGpuCollector` 会自动启用并采集：
+
+- `gpu.temperature_c`：GPU 温度（摄氏度）
+- `gpu.utilization_gpu_percent`：GPU 利用率
+- `gpu.memory_used_mb`：GPU 已用显存（MB）
+- `gpu.memory_total_mb`：GPU 总显存（MB）
+- `gpu.memory_used_percent`：GPU 显存占用率
+
 ### 现在可以识别的趋势
 当前内置的 `FallbackMetricTrendStrategy` 会对所有可转为数值的指标自动分析，并输出以下趋势类型：
 
@@ -39,6 +71,12 @@ Self Reflex 持续采集运行时观测数据（Observation），做趋势分析
 - `rapid_rise`：短时间快速上升
 - `rapid_drop`：短时间快速下降
 - `long_saturation`：长时间高位占满
+
+GPU 温度已增加专用策略 `GpuTemperatureTrendStrategy`（接管 `gpu.temperature_c`）：
+
+- 连续高温（默认阈值 `85°C`，窗口内达到一定比例）会判定为 `long_saturation`
+- 支持恢复判定（默认恢复阈值 `80°C`，且趋势向下）
+- 其他 GPU 指标仍走 Fallback Trend
 
 其中目前会被升级为事件、再交给 Reflex/LLM 判断是否通知用户的，是 `long_saturation`。例如：
 
@@ -93,7 +131,7 @@ Signal
 
 ## 6. Core Modules
 - **Collector**  
-  数据采集抽象层，支持能力标签（`required_capabilities`）按环境决定是否加载。
+  数据采集抽象层，支持能力标签（`required_capabilities`）和平台判断函数（`should_enable(system_info)`）共同决定是否加载。
 
 - **ObservationStream**  
   观测数据总线。支持时间窗口、source/metric 索引、按窗口查询。
@@ -132,6 +170,20 @@ Signal(push=true)
 最终用户收到类似：
 “我刚刚感觉到自己的运转一直绷得很紧，CPU 已经持续顶在高位，像是呼吸一直压不上来，可能有任务把算力长期占住了。”
 
+## 7.1 Collector 启用规则
+`PerceptionManager` 在注册 Collector 时，会按下面顺序决定是否真正启动：
+
+1. 调用 `get_current_system_info()` 获取当前宿主平台信息
+2. 检查 Collector 的 `required_capabilities` 是否都满足
+3. 调用 Collector 的 `should_enable(system_info)`，由 Collector 自己决定当前平台是否启用
+4. 只有上述检查都通过时，Collector 才会进入 `CollectorManager`
+
+这意味着后续如果新增平台专用 Collector，可以这样设计：
+
+- Linux 专用温度采集器：在 `should_enable()` 中检查 `os == "Linux"` 或传感器能力是否存在
+- Windows 专用 GPU Collector：在 `should_enable()` 中检查 `os == "Windows"` 且 `nvidia-smi` 可用
+- 通用 Collector：直接返回 `True`，再交给 `required_capabilities` 做基础能力约束
+
 ## 8. Installation
 将插件克隆到 AstrBot 插件目录：
 
@@ -169,6 +221,16 @@ git clone https://github.com/murphys7017/astrbot_plugin_self_reflex.git
 - `perception_enabled`
 - `default_provider_id`（`select_provider`）
 - `notify_unified_msg_origin`
+- `collector_default_interval_seconds`
+- `cpu_temp_collector_interval_seconds`（可选，单独控制 `LinuxCpuTemperatureCollector` 采样间隔）
+- `windows_cpu_temp_collector_interval_seconds`（可选，单独控制 `WindowsCpuTemperatureCollector` 采样间隔）
+- `gpu_collector_interval_seconds`（可选，单独控制 `NvidiaGpuCollector` 采样间隔）
+- `gpu_temp_trend_window_seconds`（温度趋势窗口，默认 120s）
+- `gpu_temp_trend_interval_seconds`（温度趋势分析间隔，默认 30s）
+- `gpu_temp_high_threshold_c`（高温阈值，默认 85）
+- `gpu_temp_recovery_threshold_c`（恢复阈值，默认 80）
+- `gpu_temp_saturation_ratio`（窗口内高温占比阈值，默认 0.7）
+- `gpu_temp_min_samples`（最小样本数，默认 3）
 - `trend_interval_seconds`
 - `fallback_trend_window_seconds`
 - `reflex_batch_size`
@@ -229,7 +291,8 @@ Reflex Signal 结构（当前实现）：
 ## 12. Roadmap
 1. 增加更多 Collector
 - 更细粒度 CPU / Memory / Disk / Network Collector
-- GPU Collector
+- 更稳定的 Windows CPU 温度后端（如 LibreHardwareMonitor）
+- 非 NVIDIA GPU Collector（当前已支持 NVIDIA / `nvidia-smi`）
 - Logs Collector
 - File changes Collector
 - 外部服务与 API 健康检查 Collector
