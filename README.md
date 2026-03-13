@@ -1,155 +1,191 @@
 # astrbot_plugin_self_reflex
 
-## 1. 项目标题
-**AstrBot Self Reflex: AI Perception System**
+## 项目简介
+`astrbot_plugin_self_reflex` 是一个面向 AstrBot 的 **AI Perception System** 插件。
 
-## 2. 项目简介
-`astrbot_plugin_self_reflex` 是一个面向 AstrBot 的 **AI Perception System** 插件。  
 它的目标不是做传统监控看板，而是让 AI 具备“自我感知 -> 自我判断 -> 按需上报”的能力闭环。
+
+> 这是 ai 写的，我想要的是我的 Alice 跟我说
+>
+> - “哥哥，我好像摔倒了~”
+> - “哥哥，我好像有点发烧了~”
+>
+> 未来再能自己修复自己的 bug
 
 Self Reflex 持续采集运行时观测数据（Observation），做趋势分析（Trend），统一事件流（Event），再通过 LLM 判断是否需要对用户发出自然语言提醒。
 
-当前已实现的 Collector 包括：
+## 使用
 
-- 基于 `psutil` 的宿主机总览采集器（CPU、内存、交换分区、磁盘、网络、进程）
-- 基于 `psutil` / `/sys/class/thermal` / `hwmon` 的 Linux CPU 温度采集器
-- 基于 Windows WMI/CIM (`MSAcpi_ThermalZoneTemperature`) 的 Windows CPU 温度采集器
-- 基于 `nvidia-smi` 的 NVIDIA GPU 采集器（温度、利用率、显存）
-当前还内置了一个兜底 Fallback Trend，会对数值型 Observation 自动做趋势分析，后续专用 Trend 可以覆盖默认行为。
+### 快速开始
+1. 将插件放进 AstrBot 的插件目录并重启 AstrBot。
+2. 安装依赖。当前 GPU 采集只支持 NVIDIA，需要宿主机存在可用 `nvidia-smi`。
+3. 在你希望接收主动通知的会话里执行 `/perception bind`。
+4. 执行 `/perception notify_test`，确认主动消息能正常发到该会话。
+5. 执行 `/perception status`，查看当前 Perception 是否正常运行。
 
-Collector 的启用现在分为两层判断：
+### 常用命令
+- `/perception bind`
+- `/perception unbind`
+- `/perception status`
+- `/perception notify_test`
+- `/perception_status`（兼容旧命令）
 
-- `required_capabilities`：声明 collector 依赖哪些系统能力，例如 `cpu`、`memory`、`gpu`
-- `should_enable(system_info)`：由 collector 自己根据 `PerceptionManager` 传入的平台信息决定是否启用
+说明：
+- `/perception bind` 会把当前会话的 `unified_msg_origin` 绑定为主动通知目标。
+- `/perception notify_test` 用于验证主动发送链路是否正常。
+- 如果没有绑定目标会话，插件会跳过主动发送，并记录 warning 日志。
 
-其中 `system_info` 由 `PerceptionManager.get_current_system_info()` 生成，包含当前宿主机的 `os`、`os_release`、`machine`、`processor`、`cpu_count`、`cwd` 和 `capabilities` 等信息，可用于做 Windows / Linux / macOS 的平台分流。
+### 使用示例
+![绑定会话](docs\imgs\bind.png)
+![通知效果](docs\imgs\notice.png)
 
-## 2.1 当前可监测数据
-当前默认启用的 `PsutilSystemCollector` 会周期采集以下宿主机指标：
+### 当前支持的监测项
+当前默认启用的监测包括：
 
-- `cpu.percent`：CPU 总使用率
-- `memory.percent`：物理内存使用率
-- `memory.used_bytes`：已使用物理内存
-- `memory.available_bytes`：可用物理内存
-- `swap.percent`：交换分区使用率
-- `swap.used_bytes`：已使用交换分区
-- `disk.percent`：当前工作目录所在磁盘分区使用率
-- `disk.used_bytes`：当前工作目录所在磁盘已用空间
-- `disk.free_bytes`：当前工作目录所在磁盘剩余空间
-- `network.bytes_sent`：累计发送字节数
-- `network.bytes_recv`：累计接收字节数
-- `process.count`：当前宿主机进程总数
+- `PsutilSystemCollector`
+  - `cpu.percent`
+  - `memory.percent`
+  - `memory.used_bytes`
+  - `memory.available_bytes`
+  - `swap.percent`
+  - `swap.used_bytes`
+  - `disk.percent`
+  - `disk.used_bytes`
+  - `disk.free_bytes`
+  - `network.bytes_sent`
+  - `network.bytes_recv`
+  - `process.count`
+- `LinuxCpuTemperatureCollector`
+  - `cpu.temperature_c`
+  - 优先使用 `psutil.sensors_temperatures()`
+  - 无结果时回退读取 `/sys/class/hwmon` 与 `/sys/class/thermal`
+- `WindowsCpuTemperatureCollector`
+  - `cpu.temperature_c`
+  - 通过 `Get-CimInstance root/wmi:MSAcpi_ThermalZoneTemperature` 读取
+  - 注意：不同设备支持差异很大，可能无数据，或者拿到的是 ACPI 热区温度
+- `NvidiaGpuCollector`
+  - `gpu.temperature_c`
+  - `gpu.utilization_gpu_percent`
+  - `gpu.memory_used_mb`
+  - `gpu.memory_total_mb`
+  - `gpu.memory_used_percent`
 
-这些指标都以 `Observation` 形式进入 `ObservationStream`，随后由趋势层统一分析。
+### 当前支持的趋势与通知
+当前内置的 `FallbackMetricTrendStrategy` 会自动分析所有可转成数值的 Observation，并输出：
 
-当宿主机平台为 Linux 且存在可用温度源时，`LinuxCpuTemperatureCollector` 会自动启用并采集：
+- `stable`
+- `up`
+- `down`
+- `rapid_rise`
+- `rapid_drop`
+- `long_saturation`
 
-- `cpu.temperature_c`：CPU 温度（摄氏度）
+另外，GPU 温度已经接入专用策略 `GpuTemperatureTrendStrategy`：
 
-当前实现会优先尝试 `psutil.sensors_temperatures()`，若无结果则回退读取 `/sys/class/hwmon` 与 `/sys/class/thermal`。由于当前开发环境无法直接在 Linux 机器上联调，这部分还需要后续实机验证。
+- 默认 `85°C` 以上持续一段时间会被判定为 `long_saturation`
+- 默认降到 `80°C` 以下且趋势向下时视为恢复
+- 其他 GPU 指标仍然走 Fallback Trend
 
-当宿主机平台为 Windows 且系统暴露了可用温度源时，`WindowsCpuTemperatureCollector` 会自动启用并采集：
-
-- `cpu.temperature_c`：CPU 温度（摄氏度）
-
-当前实现通过 `Get-CimInstance root/wmi:MSAcpi_ThermalZoneTemperature` 读取温度。这套接口在不同机器上的支持情况差异较大，有些设备会无数据，或者拿到的是 ACPI 热区温度而不是非常精确的 CPU 核心温度，因此也建议后续做实机验证。
-
-当宿主机存在可用 `nvidia-smi` 且平台为 Windows/Linux 时，`NvidiaGpuCollector` 会自动启用并采集：
-
-- `gpu.temperature_c`：GPU 温度（摄氏度）
-- `gpu.utilization_gpu_percent`：GPU 利用率
-- `gpu.memory_used_mb`：GPU 已用显存（MB）
-- `gpu.memory_total_mb`：GPU 总显存（MB）
-- `gpu.memory_used_percent`：GPU 显存占用率
-
-### 现在可以识别的趋势
-当前内置的 `FallbackMetricTrendStrategy` 会对所有可转为数值的指标自动分析，并输出以下趋势类型：
-
-- `stable`：基本稳定
-- `up`：持续上升
-- `down`：持续下降
-- `rapid_rise`：短时间快速上升
-- `rapid_drop`：短时间快速下降
-- `long_saturation`：长时间高位占满
-
-GPU 温度已增加专用策略 `GpuTemperatureTrendStrategy`（接管 `gpu.temperature_c`）：
-
-- 连续高温（默认阈值 `85°C`，窗口内达到一定比例）会判定为 `long_saturation`
-- 支持恢复判定（默认恢复阈值 `80°C`，且趋势向下）
-- 其他 GPU 指标仍走 Fallback Trend
-
-其中目前会被升级为事件、再交给 Reflex/LLM 判断是否通知用户的，是 `long_saturation`。例如：
+当前最容易被升级为事件并进一步通知用户的，是 `long_saturation`，例如：
 
 - `cpu.percent` 长时间接近 100%
 - `memory.percent` 长时间处于高位
 - `disk.percent` 长时间接近占满
 - `swap.percent` 长时间高负载
+- `gpu.temperature_c` 长时间处于高温
 
-## 3. Why Self Reflex
-在 AI Agent 场景中，系统健康状态会直接影响模型行为质量。  
-Self Reflex 解决的是“AI 如何感知自己正在发生什么”：
+### 配置
+配置定义在 [_conf_schema.json](/c:/Users/Administrator/Downloads/AstrBot/data/plugins/astrbot_plugin_self_reflex/_conf_schema.json)。
 
-- 感知系统状态，并为日志、文件变化、异常行为等后续 Collector 预留扩展位
-- 在本地进行轻量趋势分析
-- 只将有价值的信号交给上层 LLM 或用户
-- 为后续自动修复（Self-Healing）打基础
+常用配置项：
 
-## 4. Architecture
-Self Reflex 的核心架构如下：
+- `perception_enabled`
+- `default_provider_id`
+- `notify_unified_msg_origin`
+- `collector_default_interval_seconds`
+- `cpu_temp_collector_interval_seconds`
+- `windows_cpu_temp_collector_interval_seconds`
+- `gpu_collector_interval_seconds`
+- `gpu_temp_trend_window_seconds`
+- `gpu_temp_trend_interval_seconds`
+- `gpu_temp_high_threshold_c`
+- `gpu_temp_recovery_threshold_c`
+- `gpu_temp_saturation_ratio`
+- `gpu_temp_min_samples`
+- `trend_interval_seconds`
+- `fallback_trend_window_seconds`
+- `reflex_batch_size`
+- `reflex_batch_timeout`
+- `reflex_rate_limit`
 
-```text
-Collectors
-   ↓
-ObservationStream
-   ↓
-TrendEngine
-   ↓
-EventManager
-   ↓
-Reflex
-   ↓
-Signal
-```
+## 扩展开发
 
-职责说明：
+这一部分主要面向要继续扩展这个插件的人。
 
-- **Collector**：采集 Observation
-- **Observation**：统一观测数据结构
-- **TrendEngine**：检测趋势或异常变化
-- **EventManager**：统一管理系统事件流
-- **Reflex**：使用 LLM 判断事件是否需要处理/上报
+### 扩展入口
+如果你想继续加新的监测能力，主要看这两个抽象：
 
-## 5. Perception Pipeline
+- [base.py](/c:/Users/Administrator/Downloads/AstrBot/data/plugins/astrbot_plugin_self_reflex/perception/collectors/base.py)
+  - Collector 抽象
+  - 实现 `should_enable(system_info)` 决定当前平台是否启用
+  - 实现 `collect()` 返回 Observation
+- [strategy.py](/c:/Users/Administrator/Downloads/AstrBot/data/plugins/astrbot_plugin_self_reflex/perception/trend/strategy.py)
+  - Trend 抽象
+  - 实现 `compute_trends(observations)` 输出 Trend
+
+### Collector 启用规则
+`PerceptionManager` 在注册 Collector 时，会按下面顺序决定是否真正启动：
+
+1. 调用 `get_current_system_info()` 获取宿主平台信息。
+2. 检查 Collector 的 `required_capabilities` 是否满足。
+3. 调用 Collector 的 `should_enable(system_info)`，由 Collector 自己决定当前平台是否启用。
+4. 只有都通过时，Collector 才会进入 `CollectorManager`。
+
+`system_info` 由 `PerceptionManager.get_current_system_info()` 生成，包含：
+
+- `os`
+- `os_release`
+- `os_version`
+- `machine`
+- `processor`
+- `python_version`
+- `cpu_count`
+- `cwd`
+- `capabilities`
+
+这套机制适合做平台分流，例如：
+
+- Linux 专用采集器
+- Windows 专用采集器
+- 依赖 `nvidia-smi` 的 GPU 采集器
+
+### Core Modules
+- **Collector**
+  - 负责采集 Observation
+  - 通过 `required_capabilities` + `should_enable(system_info)` 控制启用
+- **ObservationStream**
+  - 负责缓存与查询 Observation
+- **TrendEngine**
+  - 负责执行趋势分析策略
+- **EventManager**
+  - 负责统一事件总线
+- **Reflex**
+  - 负责用 LLM 决定是否升级为 Signal
+- **PerceptionManager**
+  - 负责模块编排、生命周期和状态查询
+
+### Perception Pipeline
 完整处理链路：
 
-1. Collector 周期采集运行时数据，产生 `Observation`
-2. ObservationStream 进行时间窗口缓存与索引查询
-3. TrendEngine 按策略分析趋势，产出 `Trend` 或异常事件
-4. EventManager 统一接收事件（包括 Collector 异常、Trend 异常）
-5. Reflex 批量读取事件，调用 LLM 判断是否升级为 `Signal`（`push/level/message/summary/reason`）
-6. 插件主入口消费 Signal，生成自然语言消息并通知用户
+1. Collector 周期采集数据，产生 `Observation`
+2. `ObservationStream` 缓存并索引 Observation
+3. `TrendEngine` 分析趋势，生成 `Trend` 或异常事件
+4. `EventManager` 统一接收事件
+5. `Reflex` 批量读取事件，调用 LLM 判断是否升级为 `Signal`
+6. 插件主入口消费 `Signal`，生成自然语言消息并通知用户
 
-## 6. Core Modules
-- **Collector**  
-  数据采集抽象层，支持能力标签（`required_capabilities`）和平台判断函数（`should_enable(system_info)`）共同决定是否加载。
-
-- **ObservationStream**  
-  观测数据总线。支持时间窗口、source/metric 索引、按窗口查询。
-
-- **TrendEngine**  
-  按策略（metric + window + interval）分析趋势；无数据/异常会发事件。
-
-- **EventManager**  
-  异步事件队列，统一事件入口，队列满时丢弃最旧事件保留最新事件。
-
-- **Reflex**  
-  事件批处理 + Prompt 构建 + LLM 判断 + Signal 输出。
-
-- **PerceptionManager**  
-  总调度层，负责模块连接、生命周期管理、系统状态查询与趋势查询接口。
-
-## 7. Example Scenario
-现在比较贴近当前实现的例子是“CPU 长时间占满”：
+### 示例
+一个比较贴近当前实现的链路是“CPU 长时间占满”：
 
 ```text
 PsutilSystemCollector
@@ -164,101 +200,14 @@ Reflex 调用小模型判断是否升级
    ↓
 Signal(push=true)
    ↓
-插件调用对话 LLM生成提示并通知用户
+插件调用对话 LLM 生成提示并通知用户
 ```
 
 最终用户收到类似：
 “我刚刚感觉到自己的运转一直绷得很紧，CPU 已经持续顶在高位，像是呼吸一直压不上来，可能有任务把算力长期占住了。”
 
-## 7.1 Collector 启用规则
-`PerceptionManager` 在注册 Collector 时，会按下面顺序决定是否真正启动：
-
-1. 调用 `get_current_system_info()` 获取当前宿主平台信息
-2. 检查 Collector 的 `required_capabilities` 是否都满足
-3. 调用 Collector 的 `should_enable(system_info)`，由 Collector 自己决定当前平台是否启用
-4. 只有上述检查都通过时，Collector 才会进入 `CollectorManager`
-
-这意味着后续如果新增平台专用 Collector，可以这样设计：
-
-- Linux 专用温度采集器：在 `should_enable()` 中检查 `os == "Linux"` 或传感器能力是否存在
-- Windows 专用 GPU Collector：在 `should_enable()` 中检查 `os == "Windows"` 且 `nvidia-smi` 可用
-- 通用 Collector：直接返回 `True`，再交给 `required_capabilities` 做基础能力约束
-
-## 8. Installation
-将插件克隆到 AstrBot 插件目录：
-
-```bash
-cd <AstrBot>/data/plugins
-git clone https://github.com/murphys7017/astrbot_plugin_self_reflex.git
-```
-
-然后重启 AstrBot。
-
-## 9. Commands
-已实现命令（面向用户）：
-
-- `/perception bind`
-- `/perception unbind`
-- `/perception status`
-- `/perception notify_test`
-- `/perception_status`（兼容旧命令）
-
-说明：
-- 在目标会话执行 `/perception bind` 后，插件会保存 `event.unified_msg_origin` 作为主动通知目标。
-- `notify_test` 用于验证 `send_message(unified_msg_origin, chain)` 链路是否正常。
-
-## 10. Configuration
-插件配置使用 AstrBot 配置系统，配置定义在：
-
-- `_conf_schema.json`
-
-运行后配置会自动保存到：
-
-- `data/config/<plugin_name>_config.json`
-
-常用配置项示例：
-
-- `perception_enabled`
-- `default_provider_id`（`select_provider`）
-- `notify_unified_msg_origin`
-- `collector_default_interval_seconds`
-- `cpu_temp_collector_interval_seconds`（可选，单独控制 `LinuxCpuTemperatureCollector` 采样间隔）
-- `windows_cpu_temp_collector_interval_seconds`（可选，单独控制 `WindowsCpuTemperatureCollector` 采样间隔）
-- `gpu_collector_interval_seconds`（可选，单独控制 `NvidiaGpuCollector` 采样间隔）
-- `gpu_temp_trend_window_seconds`（温度趋势窗口，默认 120s）
-- `gpu_temp_trend_interval_seconds`（温度趋势分析间隔，默认 30s）
-- `gpu_temp_high_threshold_c`（高温阈值，默认 85）
-- `gpu_temp_recovery_threshold_c`（恢复阈值，默认 80）
-- `gpu_temp_saturation_ratio`（窗口内高温占比阈值，默认 0.7）
-- `gpu_temp_min_samples`（最小样本数，默认 3）
-- `trend_interval_seconds`
-- `fallback_trend_window_seconds`
-- `reflex_batch_size`
-- `reflex_batch_timeout`
-- `reflex_rate_limit`
-
-通知相关注意事项：
-
-- `notify_unified_msg_origin` 不是 QQ 号，而是 AstrBot 的统一会话标识串。
-- 推荐通过 `/perception bind` 自动写入该值，而不是手动填写。
-- 未绑定时，插件会记录 warning 日志并跳过主动发送。
-
-## 11. Project Structure
-结构示例（概念层）：
-
-```text
-astrbot_plugin_self_reflex/
-├── plugin/
-│   └── main.py
-└── perception/
-    ├── collectors/
-    ├── trend/
-    ├── events/
-    ├── reflex/
-    └── perception_manager.py
-```
-
-当前仓库实现（实际路径）：
+### 项目结构
+实际结构如下：
 
 ```text
 astrbot_plugin_self_reflex/
@@ -276,7 +225,7 @@ astrbot_plugin_self_reflex/
     └── perception_manager.py
 ```
 
-Reflex Signal 结构（当前实现）：
+Reflex Signal 结构：
 
 ```json
 {
@@ -288,11 +237,11 @@ Reflex Signal 结构（当前实现）：
 }
 ```
 
-## 12. Roadmap
+### Roadmap
 1. 增加更多 Collector
 - 更细粒度 CPU / Memory / Disk / Network Collector
 - 更稳定的 Windows CPU 温度后端（如 LibreHardwareMonitor）
-- 非 NVIDIA GPU Collector（当前已支持 NVIDIA / `nvidia-smi`）
+- 非 NVIDIA GPU Collector
 - Logs Collector
 - File changes Collector
 - 外部服务与 API 健康检查 Collector
@@ -302,6 +251,6 @@ Reflex Signal 结构（当前实现）：
 - Self Code 负责自动修改代码
 - 形成 **AI Self-Healing System**
 
-## 13. License
-本项目采用 **GNU Affero General Public License v3.0 (AGPL-3.0)**。  
+## License
+本项目采用 **GNU Affero General Public License v3.0 (AGPL-3.0)**。
 详见 [LICENSE](./LICENSE)。
