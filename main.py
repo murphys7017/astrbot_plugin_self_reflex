@@ -149,7 +149,9 @@ class MyPlugin(Star):
         self._runtime_notify_unified_msg_origin = ""
         self._default_provider_id = str(self.config.get("default_provider_id", "")).strip()
         self._last_agent_event: Optional[AstrMessageEvent] = None
-        self._notify_agent_event: Optional[AstrMessageEvent] = None
+        self._agent_event_cache_limit = max(1, int(self.config.get("agent_event_cache_size", 32)))
+        self._agent_event_cache: Dict[str, AstrMessageEvent] = {}
+        self._agent_event_cache_order: Deque[str] = deque()
 
         self._recent_signals: Deque[Dict[str, Any]] = deque(
             maxlen=max(1, int(self.config.get("recent_signals_cache", 50)))
@@ -238,6 +240,11 @@ class MyPlugin(Star):
         self._remember_agent_event(event)
         logger.debug(f"Command called: perception_status by={event.get_sender_name()}")
         yield event.plain_result(self._build_status_text(event))
+
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=-10000)
+    async def cache_message_event(self, event: AstrMessageEvent) -> None:
+        """缓存来自各会话的最近消息事件，供主动通知时续接 Agent 上下文。"""
+        self._remember_agent_event(event)
 
     async def _signal_loop(self) -> None:
         """持续监听 Reflex 输出信号并执行通知。"""
@@ -605,7 +612,6 @@ class MyPlugin(Star):
         """解除主动通知绑定。"""
         self._runtime_notify_unified_msg_origin = ""
         self._notify_unified_msg_origin = ""
-        self._notify_agent_event = None
         self.config["notify_unified_msg_origin"] = ""
         self._save_config()
         logger.info("Notify origin unbound")
@@ -614,18 +620,32 @@ class MyPlugin(Star):
     def _remember_agent_event(self, event: AstrMessageEvent) -> None:
         """缓存可用于 Agent 调用的事件上下文。"""
         self._last_agent_event = event
-        target = self._get_notify_target()
         origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
-        if target and origin and origin == target:
-            self._notify_agent_event = event
+        if not origin:
+            logger.debug("Skip caching agent event: event.unified_msg_origin is empty")
+            return
+
+        self._agent_event_cache[origin] = event
+        try:
+            self._agent_event_cache_order.remove(origin)
+        except ValueError:
+            pass
+        while len(self._agent_event_cache_order) >= self._agent_event_cache_limit:
+            stale_origin = self._agent_event_cache_order.popleft()
+            self._agent_event_cache.pop(stale_origin, None)
+        self._agent_event_cache_order.append(origin)
+
+        logger.debug(
+            f"Agent event cached: origin={origin} cache_size={len(self._agent_event_cache)}"
+        )
 
     def _get_agent_event_for_notify(self) -> Optional[AstrMessageEvent]:
         """优先返回通知目标会话的事件，其次回退最近事件。"""
         target = self._get_notify_target()
-        if target and self._notify_agent_event is not None:
-            notify_origin = str(getattr(self._notify_agent_event, "unified_msg_origin", "") or "").strip()
-            if notify_origin == target:
-                return self._notify_agent_event
+        if target:
+            cached_event = self._agent_event_cache.get(target)
+            if cached_event is not None:
+                return cached_event
         if self._last_agent_event is None:
             return None
         if not target:
